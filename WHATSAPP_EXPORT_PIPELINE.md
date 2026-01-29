@@ -65,6 +65,19 @@ Then run:
 run.bat --tz +00:00
 ```
 
+## Web UI (Material 3)
+Run a local UI for easy configuration and zip upload:
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\Activate.ps1
+pip install -r requirements.txt
+python -m wcp.ui_app
+```
+Then open:
+```
+http://127.0.0.1:8000
+```
+
 ---
 
 ## 0) Put files in one folder (or use the zip directly)

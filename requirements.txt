@@ -5,3 +5,8 @@
 # openai-whisper
 # pytesseract
 # pillow
+
+# UI
+fastapi
+uvicorn
+python-multipart
