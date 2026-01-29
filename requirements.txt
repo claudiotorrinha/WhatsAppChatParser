@@ -1,0 +1,7 @@
+# Core
+
+# Optional (uncomment as needed):
+# faster-whisper
+# openai-whisper
+# pytesseract
+# pillow
