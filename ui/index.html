@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WhatsApp Export UI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <script type="module" src="https://unpkg.com/@material/web/all.js?module"></script>
+  </head>
+  <body>
+    <div class="bg-gradient"></div>
+    <main class="shell">
+      <header class="hero">
+        <div class="hero-text">
+          <p class="eyebrow">WhatsApp Export</p>
+          <h1>Material 3 UI for chat processing</h1>
+          <p class="lead">Upload a zip export, choose your options, and run the pipeline without touching the CLI.</p>
+        </div>
+        <div class="hero-card">
+          <div class="chip">Local processing</div>
+          <div class="chip">Resume-aware</div>
+          <div class="chip">Audio + OCR</div>
+        </div>
+      </header>
+
+      <section class="card">
+        <form id="run-form" class="form">
+          <div class="section">
+            <h2>Input</h2>
+            <div class="grid two">
+              <div class="file-picker">
+                <md-outlined-text-field label="Zip file" id="zip-display" readonly></md-outlined-text-field>
+                <md-filled-tonal-button id="zip-button" type="button">Choose zip</md-filled-tonal-button>
+                <input type="file" id="zip" name="zip" accept=".zip" required hidden>
+              </div>
+              <md-filled-select label="Time zone offset" id="tz" name="tz">
+                <md-select-option value="+00:00" selected>UTC +00:00</md-select-option>
+                <md-select-option value="+01:00">UTC +01:00</md-select-option>
+                <md-select-option value="+02:00">UTC +02:00</md-select-option>
+                <md-select-option value="+03:00">UTC +03:00</md-select-option>
+                <md-select-option value="-01:00">UTC -01:00</md-select-option>
+                <md-select-option value="-05:00">UTC -05:00</md-select-option>
+                <md-select-option value="-08:00">UTC -08:00</md-select-option>
+              </md-filled-select>
+            </div>
+            <div class="grid two">
+              <md-outlined-text-field label="Output folder" id="out" name="out" value="out"></md-outlined-text-field>
+              <md-filled-select label="Parse format" id="format" name="format">
+                <md-select-option value="auto" selected>Auto detect</md-select-option>
+                <md-select-option value="pt">Portuguese Android</md-select-option>
+                <md-select-option value="android">Android (generic)</md-select-option>
+                <md-select-option value="ios">iOS bracket</md-select-option>
+              </md-filled-select>
+            </div>
+            <div class="grid two">
+              <md-filled-select label="Date order" id="date_order" name="date_order">
+                <md-select-option value="auto" selected>Auto detect</md-select-option>
+                <md-select-option value="dmy">Day / Month / Year</md-select-option>
+                <md-select-option value="mdy">Month / Day / Year</md-select-option>
+              </md-filled-select>
+              <div class="checkbox-row">
+                <md-checkbox id="quiet" name="quiet"></md-checkbox>
+                <label for="quiet">Quiet mode</label>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>Output</h2>
+            <div class="grid three">
+              <div class="checkbox-row">
+                <md-checkbox id="no_manifest" name="no_manifest"></md-checkbox>
+                <label for="no_manifest">Disable manifest</label>
+              </div>
+              <div class="checkbox-row">
+                <md-checkbox id="no_report" name="no_report"></md-checkbox>
+                <label for="no_report">Disable report</label>
+              </div>
+              <div class="checkbox-row">
+                <md-checkbox id="no_by_month" name="no_by_month"></md-checkbox>
+                <label for="no_by_month">Disable by-month</label>
+              </div>
+            </div>
+            <div class="grid two">
+              <div class="checkbox-row">
+                <md-checkbox id="no_md" name="no_md"></md-checkbox>
+                <label for="no_md">Disable transcript markdown</label>
+              </div>
+              <div class="field-toggle">
+                <div class="checkbox-row">
+                  <md-checkbox id="md_max_enabled"></md-checkbox>
+                  <label for="md_max_enabled">Set markdown max chars</label>
+                </div>
+                <md-outlined-text-field label="MD max chars" type="number" id="md_max_chars" value="4000" disabled></md-outlined-text-field>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>Transcription</h2>
+            <div class="grid three">
+              <div class="checkbox-row">
+                <md-checkbox id="no_transcribe" name="no_transcribe"></md-checkbox>
+                <label for="no_transcribe">Disable transcription</label>
+              </div>
+              <div class="checkbox-row">
+                <md-checkbox id="only_transcribe" name="only_transcribe"></md-checkbox>
+                <label for="only_transcribe">Only transcribe</label>
+              </div>
+              <div class="checkbox-row">
+                <md-checkbox id="no_resume" name="no_resume"></md-checkbox>
+                <label for="no_resume">Disable resume</label>
+              </div>
+            </div>
+            <div class="grid three">
+              <md-filled-select label="Convert audio" id="convert_audio" name="convert_audio">
+                <md-select-option value="mp3" selected>MP3</md-select-option>
+                <md-select-option value="wav">WAV</md-select-option>
+                <md-select-option value="none">None</md-select-option>
+              </md-filled-select>
+              <md-filled-select label="Transcribe backend" id="transcribe_backend" name="transcribe_backend">
+                <md-select-option value="openai" selected>OpenAI Whisper</md-select-option>
+                <md-select-option value="faster">Faster Whisper</md-select-option>
+                <md-select-option value="auto">Auto</md-select-option>
+              </md-filled-select>
+              <md-filled-select label="Whisper model" id="whisper_model" name="whisper_model">
+                <md-select-option value="tiny">tiny</md-select-option>
+                <md-select-option value="base">base</md-select-option>
+                <md-select-option value="small" selected>small</md-select-option>
+                <md-select-option value="medium">medium</md-select-option>
+                <md-select-option value="large-v3">large-v3</md-select-option>
+              </md-filled-select>
+            </div>
+            <div class="grid two">
+              <md-filled-select label="Transcription language" id="lang" name="lang">
+                <md-select-option value="pt" selected>Portuguese</md-select-option>
+                <md-select-option value="en">English</md-select-option>
+                <md-select-option value="es">Spanish</md-select-option>
+                <md-select-option value="fr">French</md-select-option>
+              </md-filled-select>
+              <div class="field-toggle">
+                <div class="checkbox-row">
+                  <md-checkbox id="progress_enabled"></md-checkbox>
+                  <label for="progress_enabled">Set progress interval</label>
+                </div>
+                <md-outlined-text-field label="Progress every N" type="number" id="progress_every" value="50" disabled></md-outlined-text-field>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>OCR</h2>
+            <div class="grid three">
+              <div class="checkbox-row">
+                <md-checkbox id="no_ocr" name="no_ocr"></md-checkbox>
+                <label for="no_ocr">Disable OCR</label>
+              </div>
+              <div class="checkbox-row">
+                <md-checkbox id="only_ocr" name="only_ocr"></md-checkbox>
+                <label for="only_ocr">Only OCR</label>
+              </div>
+              <div class="checkbox-row">
+                <md-checkbox id="hash_media" name="hash_media"></md-checkbox>
+                <label for="hash_media">Hash media</label>
+              </div>
+            </div>
+            <div class="grid three">
+              <md-filled-select label="OCR mode" id="ocr_mode" name="ocr_mode">
+                <md-select-option value="all" selected>All images</md-select-option>
+                <md-select-option value="likely-text">Likely text</md-select-option>
+              </md-filled-select>
+              <md-filled-select label="OCR language" id="ocr_lang" name="ocr_lang">
+                <md-select-option value="por" selected>Portuguese</md-select-option>
+                <md-select-option value="eng">English</md-select-option>
+                <md-select-option value="spa">Spanish</md-select-option>
+                <md-select-option value="fra">French</md-select-option>
+              </md-filled-select>
+              <div class="field-toggle">
+                <div class="checkbox-row">
+                  <md-checkbox id="ocr_max_enabled"></md-checkbox>
+                  <label for="ocr_max_enabled">Set OCR max</label>
+                </div>
+                <md-outlined-text-field label="OCR max per run" type="number" id="ocr_max" value="0" disabled></md-outlined-text-field>
+              </div>
+            </div>
+            <div class="grid three">
+              <div class="field-toggle">
+                <div class="checkbox-row">
+                  <md-checkbox id="ocr_edge_enabled"></md-checkbox>
+                  <label for="ocr_edge_enabled">Set edge threshold</label>
+                </div>
+                <md-outlined-text-field label="Edge threshold" type="number" id="ocr_edge_threshold" value="18.0" disabled></md-outlined-text-field>
+              </div>
+              <div class="field-toggle">
+                <div class="checkbox-row">
+                  <md-checkbox id="ocr_downscale_enabled"></md-checkbox>
+                  <label for="ocr_downscale_enabled">Set downscale</label>
+                </div>
+                <md-outlined-text-field label="Downscale max" type="number" id="ocr_downscale" value="512" disabled></md-outlined-text-field>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>Performance</h2>
+            <div class="grid three">
+              <div class="field-toggle">
+                <div class="checkbox-row">
+                  <md-checkbox id="audio_workers_enabled"></md-checkbox>
+                  <label for="audio_workers_enabled">Set audio workers</label>
+                </div>
+                <md-outlined-text-field label="Audio workers" type="number" id="audio_workers" value="2" disabled></md-outlined-text-field>
+              </div>
+              <div class="field-toggle">
+                <div class="checkbox-row">
+                  <md-checkbox id="ocr_workers_enabled"></md-checkbox>
+                  <label for="ocr_workers_enabled">Set OCR workers</label>
+                </div>
+                <md-outlined-text-field label="OCR workers" type="number" id="ocr_workers" value="2" disabled></md-outlined-text-field>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>Senders</h2>
+            <div class="grid two">
+              <div class="field-toggle">
+                <div class="checkbox-row">
+                  <md-checkbox id="me_enabled"></md-checkbox>
+                  <label for="me_enabled">Map ME names</label>
+                </div>
+                <md-outlined-text-field label="ME names (comma separated)" id="me" disabled></md-outlined-text-field>
+              </div>
+              <div class="field-toggle">
+                <div class="checkbox-row">
+                  <md-checkbox id="them_enabled"></md-checkbox>
+                  <label for="them_enabled">Map OTHER names</label>
+                </div>
+                <md-outlined-text-field label="OTHER names (comma separated)" id="them" disabled></md-outlined-text-field>
+              </div>
+            </div>
+          </div>
+
+          <div class="section actions">
+            <div class="left">
+              <md-filled-button type="submit">Run pipeline</md-filled-button>
+              <md-outlined-button type="button" id="reset">Reset</md-outlined-button>
+            </div>
+            <div class="right">
+              <div id="status-pill" class="status">Idle</div>
+            </div>
+          </div>
+        </form>
+
+        <div class="log-panel">
+          <div class="log-header">
+            <h3>Run log</h3>
+            <md-linear-progress id="progress" value="0" class="hidden"></md-linear-progress>
+          </div>
+          <pre id="log-output">Ready.</pre>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
