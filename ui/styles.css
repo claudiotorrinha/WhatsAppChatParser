@@ -1,17 +1,17 @@
 :root {
   color-scheme: light;
-  --bg: #0b0f14;
-  --card: #121822;
-  --surface: #141b25;
-  --accent: #3dd6c5;
-  --accent-2: #f3b34c;
-  --text: #e6edf3;
-  --muted: #9fb0c3;
-  --outline: rgba(255, 255, 255, 0.12);
-  --shadow: 0 24px 60px rgba(7, 9, 12, 0.45);
-  --radius: 20px;
-  --font-head: "Space Grotesk", "Segoe UI", sans-serif;
-  --font-body: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --bg: #f7f2ea;
+  --card: #fff9f2;
+  --surface: #f2e7db;
+  --ink: #2c241c;
+  --muted: #6a5f53;
+  --accent: #d86b3a;
+  --accent-2: #2f6f75;
+  --outline: rgba(44, 36, 28, 0.12);
+  --shadow: 0 20px 50px rgba(80, 62, 40, 0.16);
+  --radius: 18px;
+  --font-head: "Fraunces", "Times New Roman", serif;
+  --font-body: "Bricolage Grotesque", "Segoe UI", sans-serif;
 }
 
 * {
@@ -21,40 +21,40 @@
 body {
   margin: 0;
   font-family: var(--font-body);
-  color: var(--text);
+  color: var(--ink);
   background: var(--bg);
   min-height: 100vh;
 }
 
-.bg-gradient {
+.bg-texture {
   position: fixed;
   inset: 0;
-  background:
-    radial-gradient(circle at 10% 20%, rgba(61, 214, 197, 0.25), transparent 50%),
-    radial-gradient(circle at 80% 10%, rgba(243, 179, 76, 0.22), transparent 55%),
-    linear-gradient(135deg, #0a0e14, #111823 50%, #0b0f14);
+  background: radial-gradient(circle at 20% 20%, rgba(216, 107, 58, 0.18), transparent 55%),
+    radial-gradient(circle at 80% 10%, rgba(47, 111, 117, 0.18), transparent 60%),
+    linear-gradient(135deg, #f7f2ea, #efe2d1 60%, #f7f2ea);
   z-index: -1;
 }
 
 .shell {
-  max-width: 1100px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 32px 20px 64px;
+  padding: 36px 24px 72px;
   animation: fadeIn 0.5s ease;
 }
 
 .hero {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 24px;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .hero h1 {
   font-family: var(--font-head);
-  font-size: clamp(2.2rem, 3vw, 3.2rem);
+  font-size: clamp(2.2rem, 3.4vw, 3.4rem);
   margin: 8px 0 12px;
+  color: #1f1712;
 }
 
 .eyebrow {
@@ -62,6 +62,7 @@ body {
   letter-spacing: 0.2em;
   font-size: 0.7rem;
   color: var(--accent);
+  font-weight: 600;
 }
 
 .lead {
@@ -70,19 +71,53 @@ body {
   line-height: 1.6;
 }
 
-.card {
-  background: linear-gradient(180deg, rgba(18, 24, 34, 0.95), rgba(14, 19, 27, 0.95));
+.hero-meta {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  background: rgba(255, 249, 242, 0.7);
   border: 1px solid var(--outline);
   border-radius: var(--radius);
-  padding: 24px;
   box-shadow: var(--shadow);
-  animation: slideUp 0.5s ease;
+}
+
+.meta-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+}
+
+.meta-label {
+  color: var(--muted);
+}
+
+.meta-value {
+  font-weight: 600;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr);
+  gap: 20px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  padding: 22px;
+  box-shadow: var(--shadow);
+  animation: slideUp 0.4s ease;
+}
+
+.form-card {
+  padding: 24px 24px 8px;
 }
 
 .section {
-  margin-bottom: 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  padding-bottom: 18px;
+  margin-bottom: 22px;
+  border-bottom: 1px dashed rgba(44, 36, 28, 0.12);
+  padding-bottom: 16px;
 }
 
 .section:last-of-type {
@@ -92,8 +127,8 @@ body {
 
 .section h2 {
   font-family: var(--font-head);
-  font-size: 1.2rem;
-  margin: 0 0 16px;
+  font-size: 1.15rem;
+  margin: 0 0 12px;
 }
 
 .grid {
@@ -147,7 +182,7 @@ body {
 
 .actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
 }
 
@@ -159,43 +194,102 @@ body {
 .status {
   padding: 8px 14px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(216, 107, 58, 0.08);
   border: 1px solid var(--outline);
   font-size: 0.85rem;
 }
 
-.log-panel {
-  margin-top: 18px;
-  background: var(--surface);
-  border-radius: 16px;
-  padding: 16px;
-  border: 1px solid var(--outline);
-}
-
-.log-header {
-  display: flex;
-  align-items: center;
+.side {
+  display: grid;
   gap: 16px;
-  margin-bottom: 12px;
+  align-content: start;
 }
 
-.log-panel h3 {
+.status-card h3,
+.log-card h3 {
   margin: 0;
   font-family: var(--font-head);
   font-size: 1rem;
 }
 
+.status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.status-actions {
+  margin: 10px 0 4px;
+}
+
+.danger {
+  --md-filled-button-container-color: #b4532b;
+  --md-filled-button-label-text-color: #fff4e8;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.stat {
+  background: rgba(47, 111, 117, 0.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(47, 111, 117, 0.2);
+}
+
+.stat-label {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.stat-value {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.log-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 18px;
+  border: 1px solid var(--outline);
+}
+
+.log-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.log-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 #log-output {
   margin: 0;
-  min-height: 120px;
-  max-height: 260px;
+  min-height: 180px;
+  max-height: 360px;
   overflow: auto;
-  background: #0e131b;
+  background: #1f1a14;
   border-radius: 12px;
   padding: 12px;
-  font-size: 0.85rem;
-  color: #d8e3ed;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.82rem;
+  color: #f5efe6;
+  border: 1px solid rgba(44, 36, 28, 0.12);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .hidden {
@@ -227,8 +321,8 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .hero-card {
-    justify-content: flex-start;
+  .workspace {
+    grid-template-columns: 1fr;
   }
 
   .grid.two,
@@ -239,6 +333,6 @@ body {
   .actions {
     flex-direction: column;
     align-items: flex-start;
-    gap: 16px;
+    gap: 12px;
   }
 }

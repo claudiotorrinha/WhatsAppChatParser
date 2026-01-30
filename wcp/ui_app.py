@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import subprocess
 import threading
 import uuid
-from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import sys
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -28,6 +29,7 @@ class JobInfo:
         self.exit_code: Optional[int] = None
         self.started_at: Optional[str] = None
         self.finished_at: Optional[str] = None
+        self.process: Optional[subprocess.Popen] = None
 
 
 app = FastAPI(title="WhatsApp Export UI")
@@ -102,10 +104,15 @@ def _run_job(job: JobInfo, args: list[str]) -> None:
     job.log_path.parent.mkdir(parents=True, exist_ok=True)
     with job.log_path.open("w", encoding="utf-8") as logf:
         try:
-            with redirect_stdout(logf), redirect_stderr(logf):
-                code = run_pipeline(args)
+            cmd = [str(Path.cwd() / ".venv" / "Scripts" / "python.exe")]
+            if not Path(cmd[0]).exists():
+                cmd = [str(Path(sys.executable))]
+            cmd += [str(BASE_DIR / "whatsapp_export_to_jsonl.py")] + args[1:]
+            job.process = subprocess.Popen(cmd, stdout=logf, stderr=logf)
+            code = job.process.wait()
             job.exit_code = code
-            job.status = "done" if code == 0 else "error"
+            if job.status != "stopped":
+                job.status = "done" if code == 0 else "error"
         except Exception as e:
             logf.write(f"ERROR: {e}\n")
             job.exit_code = 1
@@ -244,6 +251,23 @@ def job_log(job_id: str) -> PlainTextResponse:
     if not job:
         return PlainTextResponse("job_not_found", status_code=404)
     return PlainTextResponse(_read_tail(job.log_path))
+
+
+@app.post("/api/jobs/{job_id}/stop")
+def stop_job(job_id: str) -> JSONResponse:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return JSONResponse({"error": "job_not_found"}, status_code=404)
+
+    if job.process and job.process.poll() is None:
+        try:
+            job.process.terminate()
+            job.status = "stopped"
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    return JSONResponse({"status": job.status})
 
 
 def main() -> None:

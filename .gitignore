@@ -9,6 +9,8 @@ __pycache__/
 
 out/
 inputs/
+.codex/
+processed/
 
 .DS_Store
 Thumbs.db

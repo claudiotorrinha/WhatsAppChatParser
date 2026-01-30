@@ -176,8 +176,10 @@ def run(argv: list[str]) -> int:
         "missing_files": 0,
         "audio_mp3_created": 0,
         "audio_mp3_skipped": 0,
+        "audio_mp3_failed": 0,
         "audio_wav_created": 0,
         "audio_wav_skipped": 0,
+        "audio_wav_failed": 0,
         "audio_transcripts_created": 0,
         "audio_transcripts_skipped": 0,
         "audio_transcripts_failed": 0,
@@ -262,16 +264,33 @@ def run(argv: list[str]) -> int:
          concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.ocr_workers)) as ex_o:
 
         futs = []
+        fut_meta: dict[concurrent.futures.Future, tuple[str, str]] = {}
         for fn in audio_files:
-            futs.append(ex_a.submit(audio_job, fn))
+            fut = ex_a.submit(audio_job, fn)
+            futs.append(fut)
+            fut_meta[fut] = ("audio", fn)
         for fn in image_files:
-            futs.append(ex_o.submit(ocr_job, fn))
+            fut = ex_o.submit(ocr_job, fn)
+            futs.append(fut)
+            fut_meta[fut] = ("image", fn)
+
+        total_tasks = len(futs)
+        done = 0
+        progress_every = max(1, int(args.progress_every))
 
         for fut in concurrent.futures.as_completed(futs):
             try:
                 fut.result()
             except Exception as e:
                 manifest.log({"type": "worker_exception", "error": str(e)})
+            finally:
+                done += 1
+                if not args.quiet:
+                    if done % progress_every == 0 or done == total_tasks:
+                        kind, fn = fut_meta.get(fut, ("task", ""))
+                        pct = (done / total_tasks * 100.0) if total_tasks else 100.0
+                        sys.stderr.write(f"Media progress: {done}/{total_tasks} ({pct:.1f}%) — {kind}: {fn}\n")
+                        sys.stderr.flush()
 
     preprocess_elapsed = time.time() - t0
     manifest.log({"type": "media_preprocess_done", "elapsed_seconds": preprocess_elapsed})

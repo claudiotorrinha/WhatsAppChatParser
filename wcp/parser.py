@@ -10,7 +10,7 @@ from .models import Message, MediaRef
 
 
 PT_LINE_RE = re.compile(
-    r"^(?P<date>\d{2}/\d{2}/\d{2}),\s+(?P<hour>\d{1,2}):(?P<min>\d{2})\s+da\s+(?P<period>manhã|tarde|noite)\s+-\s+(?P<rest>.*)$",
+    r"^(?P<date>\d{2}/\d{2}/\d{2}),\s+(?P<hour>\d{1,2}):(?P<min>\d{2})\s+da\s+(?P<period>madrugada|manhã|tarde|noite)\s+-\s+(?P<rest>.*)$",
     re.IGNORECASE,
 )
 
@@ -108,7 +108,7 @@ def parse_portuguese_timestamp(d: str, hh: str, mm: str, period: str, tz_offset:
     minute = int(mm)
 
     p = period.lower()
-    if p.startswith("man"):
+    if p.startswith("mad") or p.startswith("man"):
         if hour == 12:
             hour = 0
     elif p.startswith("tar") or p.startswith("noi"):

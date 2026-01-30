@@ -6,6 +6,11 @@ const statusPill = document.getElementById("status-pill");
 const logOutput = document.getElementById("log-output");
 const progress = document.getElementById("progress");
 const resetBtn = document.getElementById("reset");
+const stopBtn = document.getElementById("stop-job");
+const outPreview = document.getElementById("out-preview");
+const formatPreview = document.getElementById("format-preview");
+const ocrPreview = document.getElementById("ocr-preview");
+const transcribePreview = document.getElementById("transcribe-preview");
 
 const id = (name) => document.getElementById(name);
 
@@ -73,10 +78,37 @@ const syncDisableGroups = () => {
 });
 syncDisableGroups();
 
+const syncPreview = () => {
+  if (outPreview) outPreview.textContent = id("out").value || "out";
+  if (formatPreview) {
+    const fmt = id("format").value;
+    formatPreview.textContent = fmt === "auto" ? "Auto" : fmt.toUpperCase();
+  }
+  if (ocrPreview) {
+    ocrPreview.textContent = id("no_ocr").checked ? "Disabled" : "Enabled";
+  }
+  if (transcribePreview) {
+    transcribePreview.textContent = id("no_transcribe").checked ? "Disabled" : "Enabled";
+  }
+};
+
+["out", "format", "no_ocr", "no_transcribe"].forEach((field) => {
+  id(field).addEventListener("change", syncPreview);
+});
+syncPreview();
+
 let poller = null;
+let currentJobId = null;
+
+const setStopEnabled = (enabled) => {
+  if (!stopBtn) return;
+  stopBtn.disabled = !enabled;
+};
 
 const pollJob = (jobId) => {
   if (poller) clearInterval(poller);
+  currentJobId = jobId;
+  setStopEnabled(true);
   progress.classList.remove("hidden");
   progress.indeterminate = true;
   setStatus("Running", "rgba(61, 214, 197, 0.5)");
@@ -89,15 +121,23 @@ const pollJob = (jobId) => {
       const logRes = await fetch(`/api/jobs/${jobId}/log`);
       const logText = await logRes.text();
       logOutput.textContent = logText || "Running...";
+      logOutput.scrollTop = logOutput.scrollHeight;
 
       if (status.status === "done") {
         setStatus("Done", "rgba(61, 214, 197, 0.6)");
         progress.classList.add("hidden");
         clearInterval(poller);
+        setStopEnabled(false);
       } else if (status.status === "error") {
         setStatus("Error", "rgba(243, 179, 76, 0.7)");
         progress.classList.add("hidden");
         clearInterval(poller);
+        setStopEnabled(false);
+      } else if (status.status === "stopped") {
+        setStatus("Stopped", "rgba(243, 179, 76, 0.7)");
+        progress.classList.add("hidden");
+        clearInterval(poller);
+        setStopEnabled(false);
       }
     } catch (err) {
       logOutput.textContent = `Error fetching status: ${err}`;
@@ -182,4 +222,18 @@ resetBtn.addEventListener("click", () => {
   setStatus("Idle", "var(--outline)");
   logOutput.textContent = "Ready.";
   syncDisableGroups();
+  syncPreview();
+  setStopEnabled(false);
 });
+
+if (stopBtn) {
+  stopBtn.addEventListener("click", async () => {
+    if (!currentJobId) return;
+    setStatus("Stopping...", "rgba(243, 179, 76, 0.7)");
+    try {
+      await fetch(`/api/jobs/${currentJobId}/stop`, { method: "POST" });
+    } catch (err) {
+      logOutput.textContent = `Error stopping job: ${err}`;
+    }
+  });
+}

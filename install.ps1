@@ -86,6 +86,7 @@ if (-not (Test-Path $VenvDir)) {
 }
 
 & "$VenvDir\Scripts\python.exe" -m pip install -U pip wheel
+& "$VenvDir\Scripts\python.exe" -m pip install -r requirements.txt
 
 $installWhisper = Read-Host "Install local Whisper transcription (openai-whisper)? [Y/n]"
 if (-not ($installWhisper -match '^[Nn]$')) {
@@ -107,12 +108,7 @@ if (-not ($installWhisper -match '^[Nn]$')) {
   & "$VenvDir\Scripts\python.exe" -m pip install -U openai-whisper
 
   Write-Host "Verifying Whisper + torch..."
-  $code = @'
-import torch
-print("torch", torch.__version__)
-print("cuda_available", torch.cuda.is_available())
-'@
-  & "$VenvDir\Scripts\python.exe" -c $code
+  & "$VenvDir\Scripts\python.exe" -c "import torch; print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
 }
 
 $installOcr = Read-Host "Install image OCR support (pytesseract + pillow)? [Y/n]"
@@ -155,6 +151,9 @@ if (-not ($installOcr -match '^[Nn]$')) {
 
 Write-Host ""
 Write-Host "Installed."
-Write-Host "Run:"
+Write-Host "Run (UI):"
 Write-Host "  $VenvDir\Scripts\Activate.ps1"
+Write-Host "  python -m wcp.ui_app"
+Write-Host ""
+Write-Host "Optional CLI (advanced):"
 Write-Host "  python whatsapp_export_to_jsonl.py --tz +00:00"

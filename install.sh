@@ -44,6 +44,7 @@ fi
 source "$VENV_DIR/bin/activate"
 
 python -m pip install -U pip wheel
+pip install -r requirements.txt
 
 # Default behavior of the app is to do *all* enrichments.
 # So we default these installs to YES (you can still opt out).
@@ -66,11 +67,7 @@ if [[ ! "$yn" =~ ^[Nn]$ ]]; then
   pip install -U openai-whisper
 
   echo "Verifying Whisper + torch..." >&2
-  python - <<'PY'
-import torch
-print('torch', torch.__version__)
-print('cuda_available', torch.cuda.is_available())
-PY
+  python -c "import torch; print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
 fi
 
 read -r -p "Install image OCR support (pytesseract + pillow)? [Y/n] " yn
@@ -105,7 +102,10 @@ echo
 cat <<'EOF'
 Installed.
 
-Run:
+Run (UI):
   source .venv/bin/activate
+  python -m wcp.ui_app
+
+Optional CLI (advanced):
   python whatsapp_export_to_jsonl.py --tz +00:00
 EOF
