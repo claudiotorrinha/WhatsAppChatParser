@@ -164,6 +164,13 @@
                 </div>
                 <p class="helper">Re-process everything even if outputs exist.</p>
               </div>
+              <div class="option">
+                <div class="checkbox-row">
+                  <md-checkbox id="force_cpu" name="force_cpu"></md-checkbox>
+                  <label for="force_cpu">Force CPU (disable CUDA)</label>
+                </div>
+                <p class="helper">Useful for low‑VRAM GPUs or stability.</p>
+              </div>
             </div>
             <div class="grid three">
               <div class="field">
@@ -176,9 +183,9 @@
               </div>
               <div class="field">
                 <md-filled-select label="Transcribe backend" id="transcribe_backend" name="transcribe_backend">
-                  <md-select-option value="openai" selected>OpenAI Whisper</md-select-option>
-                  <md-select-option value="faster">Faster Whisper</md-select-option>
-                  <md-select-option value="auto">Auto</md-select-option>
+                  <md-select-option value="openai" selected>OpenAI Whisper (GPU if available)</md-select-option>
+                  <md-select-option value="faster">Faster Whisper (CPU)</md-select-option>
+                  <md-select-option value="auto">Auto (prefers OpenAI)</md-select-option>
                 </md-filled-select>
                 <p class="helper">Auto picks what is installed.</p>
               </div>
@@ -347,6 +354,13 @@
               </div>
               <div id="status-pill" class="status">Idle</div>
             </div>
+            <div id="status-banner" class="status-banner idle">
+              <div class="status-icon"></div>
+              <div class="status-text">
+                <p class="status-title">Idle</p>
+                <p class="status-subtitle">Upload a zip to begin.</p>
+              </div>
+            </div>
             <md-linear-progress id="progress" value="0" class="hidden"></md-linear-progress>
             <div class="status-actions">
               <md-filled-button type="button" id="stop-job" class="danger" disabled>Stop run</md-filled-button>
@@ -367,6 +381,14 @@
               <div class="stat">
                 <span class="stat-label">Transcribe</span>
                 <span class="stat-value" id="transcribe-preview">Enabled</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">CUDA</span>
+                <span class="stat-value" id="cuda-preview">Unknown</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Elapsed</span>
+                <span class="stat-value" id="elapsed-preview">00:00</span>
               </div>
             </div>
           </div>

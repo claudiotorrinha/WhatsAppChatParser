@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -227,13 +228,40 @@ def run(argv: list[str]) -> int:
 
     t0 = time.time()
 
+    log_lock = threading.Lock()
+    state_lock = threading.Lock()
+    current = {"audio": None, "image": None, "audio_start": None, "image_start": None}
+
+    def log_line(msg: str) -> None:
+        if args.quiet:
+            return
+        with log_lock:
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
+
     # Audio pool
     def audio_job(fn: str):
+        with state_lock:
+            current["audio"] = fn
+            current["audio_start"] = time.time()
+        log_line(f"Media start: audio: {fn}")
         mp.ensure_audio(fn)
+        with state_lock:
+            if current.get("audio") == fn:
+                current["audio"] = None
+                current["audio_start"] = None
 
     # OCR pool
     def ocr_job(fn: str):
+        with state_lock:
+            current["image"] = fn
+            current["image_start"] = time.time()
+        log_line(f"Media start: image: {fn}")
         mp.ensure_image(fn)
+        with state_lock:
+            if current.get("image") == fn:
+                current["image"] = None
+                current["image_start"] = None
 
     # Limit tasks for only modes
     if args.only_transcribe:
@@ -265,6 +293,8 @@ def run(argv: list[str]) -> int:
 
         futs = []
         fut_meta: dict[concurrent.futures.Future, tuple[str, str]] = {}
+        done_lock = threading.Lock()
+        done_ref = {"count": 0}
         for fn in audio_files:
             fut = ex_a.submit(audio_job, fn)
             futs.append(fut)
@@ -278,6 +308,33 @@ def run(argv: list[str]) -> int:
         done = 0
         progress_every = max(1, int(args.progress_every))
 
+        heartbeat_stop = threading.Event()
+
+        def heartbeat():
+            if args.quiet:
+                return
+            while not heartbeat_stop.wait(30):
+                with done_lock:
+                    c = done_ref["count"]
+                pct = (c / total_tasks * 100.0) if total_tasks else 100.0
+                with state_lock:
+                    cur_audio = current.get("audio")
+                    cur_image = current.get("image")
+                    audio_start = current.get("audio_start")
+                    image_start = current.get("image_start")
+                if cur_audio:
+                    item_elapsed = fmt_eta(time.time() - audio_start) if audio_start else "?"
+                    cur = f"audio: {cur_audio} ({item_elapsed})"
+                elif cur_image:
+                    item_elapsed = fmt_eta(time.time() - image_start) if image_start else "?"
+                    cur = f"image: {cur_image} ({item_elapsed})"
+                else:
+                    cur = "idle"
+                log_line(f"Media heartbeat: {c}/{total_tasks} ({pct:.1f}%) — current {cur} — elapsed {fmt_eta(time.time() - t0)}")
+
+        hb_thread = threading.Thread(target=heartbeat, daemon=True)
+        hb_thread.start()
+
         for fut in concurrent.futures.as_completed(futs):
             try:
                 fut.result()
@@ -285,12 +342,19 @@ def run(argv: list[str]) -> int:
                 manifest.log({"type": "worker_exception", "error": str(e)})
             finally:
                 done += 1
+                with done_lock:
+                    done_ref["count"] = done
                 if not args.quiet:
                     if done % progress_every == 0 or done == total_tasks:
                         kind, fn = fut_meta.get(fut, ("task", ""))
                         pct = (done / total_tasks * 100.0) if total_tasks else 100.0
-                        sys.stderr.write(f"Media progress: {done}/{total_tasks} ({pct:.1f}%) — {kind}: {fn}\n")
-                        sys.stderr.flush()
+                        log_line(f"Media progress: {done}/{total_tasks} ({pct:.1f}%) — {kind}: {fn}")
+
+        heartbeat_stop.set()
+        try:
+            hb_thread.join(timeout=1.0)
+        except Exception:
+            pass
 
     preprocess_elapsed = time.time() - t0
     manifest.log({"type": "media_preprocess_done", "elapsed_seconds": preprocess_elapsed})
