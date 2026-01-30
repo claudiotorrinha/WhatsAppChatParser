@@ -15,6 +15,14 @@ class TestUiApp(unittest.TestCase):
         self.assertEqual(ui_app._parse_float("2.5"), 2.5)
         self.assertIsNone(ui_app._parse_float("x"))
 
+    def test_runtime_info_keys(self):
+        info = ui_app._runtime_info()
+        self.assertIn("cuda_available", info)
+        self.assertIn("torch_version", info)
+        self.assertIn("whisper_available", info)
+        self.assertIn("openai_whisper_available", info)
+        self.assertIn("faster_whisper_available", info)
+
 
 if __name__ == "__main__":
     unittest.main()

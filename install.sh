@@ -70,6 +70,11 @@ if [[ ! "$yn" =~ ^[Nn]$ ]]; then
   python -c "import torch; print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
 fi
 
+read -r -p "Install Faster Whisper (CPU backend)? [Y/n] " ynf
+if [[ ! "$ynf" =~ ^[Nn]$ ]]; then
+  pip install -U faster-whisper
+fi
+
 read -r -p "Install image OCR support (pytesseract + pillow)? [Y/n] " yn
 if [[ ! "$yn" =~ ^[Nn]$ ]]; then
   pip install -U pytesseract pillow

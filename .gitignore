@@ -11,6 +11,7 @@ out/
 inputs/
 .codex/
 processed/
+tesseract.txt
 
 .DS_Store
 Thumbs.db

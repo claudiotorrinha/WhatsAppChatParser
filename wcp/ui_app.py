@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import uuid
@@ -30,6 +31,7 @@ class JobInfo:
         self.started_at: Optional[str] = None
         self.finished_at: Optional[str] = None
         self.process: Optional[subprocess.Popen] = None
+        self.force_cpu = False
 
 
 app = FastAPI(title="WhatsApp Export UI")
@@ -89,6 +91,45 @@ def _parse_float(val: Optional[str]) -> Optional[float]:
         return None
 
 
+def _runtime_info() -> dict:
+    cuda_available: Optional[bool] = None
+    torch_version: Optional[str] = None
+    whisper_available = False
+    faster_whisper_available = False
+
+    try:
+        import torch  # type: ignore
+        torch_version = getattr(torch, "__version__", None)
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception:
+        cuda_available = None
+        torch_version = None
+
+    try:
+        import whisper  # type: ignore
+        whisper_available = True
+    except Exception:
+        whisper_available = False
+
+    try:
+        import faster_whisper  # type: ignore
+        faster_whisper_available = True
+    except Exception:
+        faster_whisper_available = False
+
+    return {
+        "cuda_available": cuda_available,
+        "torch_version": torch_version,
+        "whisper_available": whisper_available,
+        "openai_whisper_available": whisper_available,
+        "faster_whisper_available": faster_whisper_available,
+    }
+    try:
+        return float(val)
+    except Exception:
+        return None
+
+
 def _add_multi(args: list[str], flag: str, value: Optional[str]) -> None:
     if not value:
         return
@@ -108,7 +149,10 @@ def _run_job(job: JobInfo, args: list[str]) -> None:
             if not Path(cmd[0]).exists():
                 cmd = [str(Path(sys.executable))]
             cmd += [str(BASE_DIR / "whatsapp_export_to_jsonl.py")] + args[1:]
-            job.process = subprocess.Popen(cmd, stdout=logf, stderr=logf)
+            env = os.environ.copy()
+            if job.force_cpu:
+                env["CUDA_VISIBLE_DEVICES"] = ""
+            job.process = subprocess.Popen(cmd, stdout=logf, stderr=logf, env=env)
             code = job.process.wait()
             job.exit_code = code
             if job.status != "stopped":
@@ -219,6 +263,7 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
     log_dir = out_dir / "ui_logs"
     log_path = log_dir / f"{job_id}.log"
     job = JobInfo(job_id=job_id, log_path=log_path)
+    job.force_cpu = _parse_bool(form.get("force_cpu"))
 
     with _jobs_lock:
         _jobs[job_id] = job
@@ -251,6 +296,11 @@ def job_log(job_id: str) -> PlainTextResponse:
     if not job:
         return PlainTextResponse("job_not_found", status_code=404)
     return PlainTextResponse(_read_tail(job.log_path))
+
+
+@app.get("/api/runtime")
+def runtime_info() -> JSONResponse:
+    return JSONResponse(_runtime_info())
 
 
 @app.post("/api/jobs/{job_id}/stop")

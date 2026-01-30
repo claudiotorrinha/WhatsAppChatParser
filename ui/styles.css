@@ -199,6 +199,76 @@ body {
   font-size: 0.85rem;
 }
 
+.status-banner {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 14px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(44, 36, 28, 0.12);
+  background: rgba(47, 111, 117, 0.08);
+}
+
+.status-banner .status-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 4px rgba(106, 95, 83, 0.15);
+}
+
+.status-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.status-subtitle {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.status-banner.running {
+  background: rgba(216, 107, 58, 0.12);
+  border-color: rgba(216, 107, 58, 0.4);
+}
+
+.status-banner.running .status-icon {
+  background: var(--accent);
+  box-shadow: 0 0 0 6px rgba(216, 107, 58, 0.25);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.status-banner.done {
+  background: rgba(47, 111, 117, 0.14);
+  border-color: rgba(47, 111, 117, 0.4);
+}
+
+.status-banner.done .status-icon {
+  background: var(--accent-2);
+  box-shadow: 0 0 0 6px rgba(47, 111, 117, 0.25);
+}
+
+.status-banner.error {
+  background: rgba(183, 72, 46, 0.18);
+  border-color: rgba(183, 72, 46, 0.45);
+}
+
+.status-banner.error .status-icon {
+  background: #b7482e;
+  box-shadow: 0 0 0 6px rgba(183, 72, 46, 0.3);
+}
+
+.status-banner.idle {
+  background: rgba(44, 36, 28, 0.06);
+  border-color: rgba(44, 36, 28, 0.12);
+}
+
+.status-banner.idle .status-icon {
+  background: var(--muted);
+}
+
 .side {
   display: grid;
   gap: 16px;
@@ -313,6 +383,21 @@ body {
   to {
     transform: translateY(0);
     opacity: 1;
+  }
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(216, 107, 58, 0.25);
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 10px rgba(216, 107, 58, 0.15);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(216, 107, 58, 0.25);
   }
 }
 

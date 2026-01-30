@@ -111,6 +111,11 @@ if (-not ($installWhisper -match '^[Nn]$')) {
   & "$VenvDir\Scripts\python.exe" -c "import torch; print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
 }
 
+$installFasterWhisper = Read-Host "Install Faster Whisper (CPU backend)? [Y/n]"
+if (-not ($installFasterWhisper -match '^[Nn]$')) {
+  & "$VenvDir\Scripts\python.exe" -m pip install -U faster-whisper
+}
+
 $installOcr = Read-Host "Install image OCR support (pytesseract + pillow)? [Y/n]"
 if (-not ($installOcr -match '^[Nn]$')) {
   & "$VenvDir\Scripts\python.exe" -m pip install -U pytesseract pillow
