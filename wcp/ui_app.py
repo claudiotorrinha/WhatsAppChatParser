@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import threading
 import uuid
-from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import sys
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -28,6 +30,8 @@ class JobInfo:
         self.exit_code: Optional[int] = None
         self.started_at: Optional[str] = None
         self.finished_at: Optional[str] = None
+        self.process: Optional[subprocess.Popen] = None
+        self.force_cpu = False
 
 
 app = FastAPI(title="WhatsApp Export UI")
@@ -87,6 +91,45 @@ def _parse_float(val: Optional[str]) -> Optional[float]:
         return None
 
 
+def _runtime_info() -> dict:
+    cuda_available: Optional[bool] = None
+    torch_version: Optional[str] = None
+    whisper_available = False
+    faster_whisper_available = False
+
+    try:
+        import torch  # type: ignore
+        torch_version = getattr(torch, "__version__", None)
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception:
+        cuda_available = None
+        torch_version = None
+
+    try:
+        import whisper  # type: ignore
+        whisper_available = True
+    except Exception:
+        whisper_available = False
+
+    try:
+        import faster_whisper  # type: ignore
+        faster_whisper_available = True
+    except Exception:
+        faster_whisper_available = False
+
+    return {
+        "cuda_available": cuda_available,
+        "torch_version": torch_version,
+        "whisper_available": whisper_available,
+        "openai_whisper_available": whisper_available,
+        "faster_whisper_available": faster_whisper_available,
+    }
+    try:
+        return float(val)
+    except Exception:
+        return None
+
+
 def _add_multi(args: list[str], flag: str, value: Optional[str]) -> None:
     if not value:
         return
@@ -102,10 +145,18 @@ def _run_job(job: JobInfo, args: list[str]) -> None:
     job.log_path.parent.mkdir(parents=True, exist_ok=True)
     with job.log_path.open("w", encoding="utf-8") as logf:
         try:
-            with redirect_stdout(logf), redirect_stderr(logf):
-                code = run_pipeline(args)
+            cmd = [str(Path.cwd() / ".venv" / "Scripts" / "python.exe")]
+            if not Path(cmd[0]).exists():
+                cmd = [str(Path(sys.executable))]
+            cmd += [str(BASE_DIR / "whatsapp_export_to_jsonl.py")] + args[1:]
+            env = os.environ.copy()
+            if job.force_cpu:
+                env["CUDA_VISIBLE_DEVICES"] = ""
+            job.process = subprocess.Popen(cmd, stdout=logf, stderr=logf, env=env)
+            code = job.process.wait()
             job.exit_code = code
-            job.status = "done" if code == 0 else "error"
+            if job.status != "stopped":
+                job.status = "done" if code == 0 else "error"
         except Exception as e:
             logf.write(f"ERROR: {e}\n")
             job.exit_code = 1
@@ -212,6 +263,7 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
     log_dir = out_dir / "ui_logs"
     log_path = log_dir / f"{job_id}.log"
     job = JobInfo(job_id=job_id, log_path=log_path)
+    job.force_cpu = _parse_bool(form.get("force_cpu"))
 
     with _jobs_lock:
         _jobs[job_id] = job
@@ -244,6 +296,28 @@ def job_log(job_id: str) -> PlainTextResponse:
     if not job:
         return PlainTextResponse("job_not_found", status_code=404)
     return PlainTextResponse(_read_tail(job.log_path))
+
+
+@app.get("/api/runtime")
+def runtime_info() -> JSONResponse:
+    return JSONResponse(_runtime_info())
+
+
+@app.post("/api/jobs/{job_id}/stop")
+def stop_job(job_id: str) -> JSONResponse:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return JSONResponse({"error": "job_not_found"}, status_code=404)
+
+    if job.process and job.process.poll() is None:
+        try:
+            job.process.terminate()
+            job.status = "stopped"
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    return JSONResponse({"status": job.status})
 
 
 def main() -> None:
