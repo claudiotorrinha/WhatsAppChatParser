@@ -1,31 +1,38 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 import threading
 import uuid
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-import sys
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from .main import run as run_pipeline
+from .run_config import RunConfig
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 UI_DIR = BASE_DIR / "ui"
 DEFAULT_OUT_DIR = BASE_DIR / "out"
-UPLOAD_DIR = DEFAULT_OUT_DIR / "_uploads"
+JOB_DIR_NAME = "ui_jobs"
+LOG_MAX_BYTES = 5_000_000
+LOG_TRIM_BYTES = 2_000_000
 
 
 class JobInfo:
-    def __init__(self, job_id: str, log_path: Path):
+    def __init__(self, job_id: str, log_path: Path, out_dir: Path, cfg: RunConfig, argv: list[str]):
         self.job_id = job_id
         self.log_path = log_path
+        self.out_dir = out_dir
+        self.cfg = cfg
+        self.argv = argv
         self.status = "queued"
         self.exit_code: Optional[int] = None
         self.started_at: Optional[str] = None
@@ -50,6 +57,60 @@ def _resolve_out_dir(out_dir: str) -> Path:
     if not p.is_absolute():
         p = (BASE_DIR / p).resolve()
     return p
+
+
+def _job_state_dir() -> Path:
+    return DEFAULT_OUT_DIR / JOB_DIR_NAME
+
+
+def _job_state_path(job_id: str) -> Path:
+    return _job_state_dir() / f"{job_id}.json"
+
+
+def _job_public_state(state: dict) -> dict:
+    return {
+        "job_id": state.get("job_id"),
+        "status": state.get("status"),
+        "exit_code": state.get("exit_code"),
+        "started_at": state.get("started_at"),
+        "finished_at": state.get("finished_at"),
+    }
+
+
+def _job_state_dict(job: JobInfo) -> dict:
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "exit_code": job.exit_code,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "log_path": str(job.log_path),
+        "out_dir": str(job.out_dir),
+        "force_cpu": job.force_cpu,
+        "argv": job.argv,
+        "config": asdict(job.cfg),
+        "pid": job.process.pid if job.process else None,
+        "updated_at": _now_iso(),
+    }
+
+
+def _save_job_state(job: JobInfo) -> None:
+    path = _job_state_path(job.job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(_job_state_dict(job), f, indent=2, sort_keys=True)
+    tmp.replace(path)
+
+
+def _load_job_state(job_id: str) -> Optional[dict]:
+    path = _job_state_path(job_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def _read_tail(path: Path, max_bytes: int = 20000) -> str:
@@ -91,6 +152,140 @@ def _parse_float(val: Optional[str]) -> Optional[float]:
         return None
 
 
+def _parse_csv(val: Optional[str]) -> list[str]:
+    if not val:
+        return []
+    items = []
+    for raw in str(val).split(","):
+        item = raw.strip()
+        if item:
+            items.append(item)
+    return items
+
+
+def _default_workers() -> int:
+    return min(2, os.cpu_count() or 4)
+
+
+def _build_run_config(form, zip_path: Path, out_dir_str: str) -> RunConfig:
+    defaults = RunConfig(folder=str(zip_path))
+
+    progress_every = _parse_int(form.get("progress_every"))
+    if progress_every is None:
+        progress_every = defaults.progress_every
+
+    md_max_chars = _parse_int(form.get("md_max_chars"))
+    if md_max_chars is None:
+        md_max_chars = defaults.md_max_chars
+
+    audio_workers = _parse_int(form.get("audio_workers"))
+    if audio_workers is None:
+        audio_workers = _default_workers()
+
+    ocr_workers = _parse_int(form.get("ocr_workers"))
+    if ocr_workers is None:
+        ocr_workers = _default_workers()
+
+    ocr_max = _parse_int(form.get("ocr_max"))
+    if ocr_max is None:
+        ocr_max = defaults.ocr_max
+
+    ocr_edge_threshold = _parse_float(form.get("ocr_edge_threshold"))
+    if ocr_edge_threshold is None:
+        ocr_edge_threshold = defaults.ocr_edge_threshold
+
+    ocr_downscale = _parse_int(form.get("ocr_downscale"))
+    if ocr_downscale is None:
+        ocr_downscale = defaults.ocr_downscale
+
+    return RunConfig(
+        folder=str(zip_path),
+        tz=str(form.get("tz") or defaults.tz),
+        out=out_dir_str or defaults.out,
+        quiet=_parse_bool(form.get("quiet")),
+        progress_every=progress_every,
+        format=str(form.get("format") or defaults.format),
+        date_order=str(form.get("date_order") or defaults.date_order),
+        no_resume=_parse_bool(form.get("no_resume")),
+        no_manifest=_parse_bool(form.get("no_manifest")),
+        no_report=_parse_bool(form.get("no_report")),
+        no_md=_parse_bool(form.get("no_md")),
+        md_max_chars=md_max_chars,
+        no_by_month=_parse_bool(form.get("no_by_month")),
+        audio_workers=audio_workers,
+        ocr_workers=ocr_workers,
+        hash_media=_parse_bool(form.get("hash_media")),
+        me=_parse_csv(form.get("me")),
+        them=_parse_csv(form.get("them")),
+        convert_audio=str(form.get("convert_audio") or defaults.convert_audio),
+        no_transcribe=_parse_bool(form.get("no_transcribe")),
+        whisper_model=str(form.get("whisper_model") or defaults.whisper_model),
+        lang=str(form.get("lang") or defaults.lang),
+        transcribe_backend=str(form.get("transcribe_backend") or defaults.transcribe_backend),
+        no_ocr=_parse_bool(form.get("no_ocr")),
+        ocr_lang=str(form.get("ocr_lang") or defaults.ocr_lang),
+        ocr_mode=str(form.get("ocr_mode") or defaults.ocr_mode),
+        ocr_max=ocr_max,
+        ocr_edge_threshold=ocr_edge_threshold,
+        ocr_downscale=ocr_downscale,
+        only_transcribe=_parse_bool(form.get("only_transcribe")),
+        only_ocr=_parse_bool(form.get("only_ocr")),
+    )
+
+
+def _check_transcribe_backend(cfg: RunConfig) -> Optional[str]:
+    if cfg.no_transcribe or cfg.only_ocr:
+        return None
+    info = _runtime_info()
+    openai_ok = bool(info.get("openai_whisper_available") or info.get("whisper_available"))
+    faster_ok = bool(info.get("faster_whisper_available"))
+    backend = cfg.transcribe_backend
+    if backend == "openai" and not openai_ok:
+        return "OpenAI Whisper is not installed."
+    if backend == "faster" and not faster_ok:
+        return "Faster Whisper is not installed."
+    if backend == "auto" and not (openai_ok or faster_ok):
+        return "No transcription backend is installed."
+    return None
+
+
+def _trim_log(path: Path) -> None:
+    if not path.exists():
+        return
+    size = path.stat().st_size
+    if size <= LOG_MAX_BYTES:
+        return
+    with path.open("rb") as f:
+        if size > LOG_TRIM_BYTES:
+            f.seek(-LOG_TRIM_BYTES, 2)
+        data = f.read()
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("wb") as f:
+        f.write(b"... log trimmed ...\n")
+        f.write(data)
+    tmp.replace(path)
+
+
+class _LogWriter:
+    def __init__(self, path: Path):
+        self.path = path
+        self.handle = path.open("a", encoding="utf-8")
+
+    def write(self, text: str) -> None:
+        self.handle.write(text)
+        self.handle.flush()
+        if self.path.stat().st_size > LOG_MAX_BYTES:
+            self.handle.close()
+            _trim_log(self.path)
+            self.handle = self.path.open("a", encoding="utf-8")
+
+    def close(self) -> None:
+        try:
+            self.handle.close()
+        except Exception:
+            pass
+
+
 def _runtime_info() -> dict:
     cuda_available: Optional[bool] = None
     torch_version: Optional[str] = None
@@ -124,45 +319,51 @@ def _runtime_info() -> dict:
         "openai_whisper_available": whisper_available,
         "faster_whisper_available": faster_whisper_available,
     }
-    try:
-        return float(val)
-    except Exception:
-        return None
 
 
-def _add_multi(args: list[str], flag: str, value: Optional[str]) -> None:
-    if not value:
-        return
-    for item in value.split(","):
-        item = item.strip()
-        if item:
-            args.extend([flag, item])
-
-
-def _run_job(job: JobInfo, args: list[str]) -> None:
+def _run_job(job: JobInfo, argv: list[str]) -> None:
     job.status = "running"
     job.started_at = _now_iso()
+    _save_job_state(job)
     job.log_path.parent.mkdir(parents=True, exist_ok=True)
-    with job.log_path.open("w", encoding="utf-8") as logf:
-        try:
-            cmd = [str(Path.cwd() / ".venv" / "Scripts" / "python.exe")]
-            if not Path(cmd[0]).exists():
-                cmd = [str(Path(sys.executable))]
-            cmd += [str(BASE_DIR / "whatsapp_export_to_jsonl.py")] + args[1:]
-            env = os.environ.copy()
-            if job.force_cpu:
-                env["CUDA_VISIBLE_DEVICES"] = ""
-            job.process = subprocess.Popen(cmd, stdout=logf, stderr=logf, env=env)
-            code = job.process.wait()
-            job.exit_code = code
-            if job.status != "stopped":
-                job.status = "done" if code == 0 else "error"
-        except Exception as e:
-            logf.write(f"ERROR: {e}\n")
-            job.exit_code = 1
-            job.status = "error"
-        finally:
-            job.finished_at = _now_iso()
+    log_writer = _LogWriter(job.log_path)
+    try:
+        cmd = [str(Path.cwd() / ".venv" / "Scripts" / "python.exe")]
+        if not Path(cmd[0]).exists():
+            cmd = [str(Path(sys.executable))]
+        cmd += [str(BASE_DIR / "whatsapp_export_to_jsonl.py")] + argv
+        env = os.environ.copy()
+        if job.force_cpu:
+            env["CUDA_VISIBLE_DEVICES"] = ""
+
+        log_writer.write(f"Command: {' '.join(cmd)}\n")
+
+        job.process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+        _save_job_state(job)
+
+        if job.process.stdout:
+            for line in job.process.stdout:
+                log_writer.write(line)
+
+        code = job.process.wait()
+        job.exit_code = code
+        if job.status != "stopped":
+            job.status = "done" if code == 0 else "error"
+    except Exception as e:
+        log_writer.write(f"ERROR: {e}\n")
+        job.exit_code = 1
+        job.status = "error"
+    finally:
+        job.finished_at = _now_iso()
+        _save_job_state(job)
+        log_writer.close()
 
 
 @app.get("/")
@@ -176,6 +377,7 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
 
     out_dir_str = str(form.get("out") or "out")
     out_dir = _resolve_out_dir(out_dir_str)
+    out_dir.mkdir(parents=True, exist_ok=True)
     uploads_dir = out_dir / "_uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
@@ -186,89 +388,27 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
     with zip_path.open("wb") as f:
         f.write(await zip.read())
 
-    args = ["whatsapp_export_to_jsonl.py", str(zip_path)]
-    tz = str(form.get("tz") or "+00:00")
-    args += ["--tz", tz]
-    args += ["--out", out_dir_str]
+    cfg = _build_run_config(form, zip_path, out_dir_str)
+    errors = cfg.validate()
+    if errors:
+        return JSONResponse({"error": "invalid_config", "details": errors}, status_code=400)
 
-    fmt = str(form.get("format") or "auto")
-    date_order = str(form.get("date_order") or "auto")
-    args += ["--format", fmt, "--date-order", date_order]
+    backend_error = _check_transcribe_backend(cfg)
+    if backend_error:
+        return JSONResponse({"error": "backend_unavailable", "details": backend_error}, status_code=400)
 
-    if _parse_bool(form.get("quiet")):
-        args.append("--quiet")
-
-    progress_every = _parse_int(form.get("progress_every"))
-    if progress_every is not None:
-        args += ["--progress-every", str(progress_every)]
-
-    if _parse_bool(form.get("no_resume")):
-        args.append("--no-resume")
-    if _parse_bool(form.get("no_manifest")):
-        args.append("--no-manifest")
-    if _parse_bool(form.get("no_report")):
-        args.append("--no-report")
-    if _parse_bool(form.get("no_md")):
-        args.append("--no-md")
-    if _parse_bool(form.get("no_by_month")):
-        args.append("--no-by-month")
-
-    audio_workers = _parse_int(form.get("audio_workers"))
-    if audio_workers is not None:
-        args += ["--audio-workers", str(audio_workers)]
-    ocr_workers = _parse_int(form.get("ocr_workers"))
-    if ocr_workers is not None:
-        args += ["--ocr-workers", str(ocr_workers)]
-
-    if _parse_bool(form.get("hash_media")):
-        args.append("--hash-media")
-
-    _add_multi(args, "--me", str(form.get("me") or "").strip() or None)
-    _add_multi(args, "--them", str(form.get("them") or "").strip() or None)
-
-    convert_audio = str(form.get("convert_audio") or "mp3")
-    args += ["--convert-audio", convert_audio]
-
-    if _parse_bool(form.get("no_transcribe")):
-        args.append("--no-transcribe")
-    whisper_model = str(form.get("whisper_model") or "small")
-    args += ["--whisper-model", whisper_model]
-    lang = str(form.get("lang") or "pt")
-    args += ["--lang", lang]
-    transcribe_backend = str(form.get("transcribe_backend") or "openai")
-    args += ["--transcribe-backend", transcribe_backend]
-
-    if _parse_bool(form.get("no_ocr")):
-        args.append("--no-ocr")
-    ocr_lang = str(form.get("ocr_lang") or "por")
-    args += ["--ocr-lang", ocr_lang]
-    ocr_mode = str(form.get("ocr_mode") or "all")
-    args += ["--ocr-mode", ocr_mode]
-    ocr_max = _parse_int(form.get("ocr_max"))
-    if ocr_max is not None:
-        args += ["--ocr-max", str(ocr_max)]
-    ocr_edge_threshold = _parse_float(form.get("ocr_edge_threshold"))
-    if ocr_edge_threshold is not None:
-        args += ["--ocr-edge-threshold", str(ocr_edge_threshold)]
-    ocr_downscale = _parse_int(form.get("ocr_downscale"))
-    if ocr_downscale is not None:
-        args += ["--ocr-downscale", str(ocr_downscale)]
-
-    if _parse_bool(form.get("only_transcribe")):
-        args.append("--only-transcribe")
-    if _parse_bool(form.get("only_ocr")):
-        args.append("--only-ocr")
-
+    argv = cfg.to_argv(include_prog=False)
     job_id = uuid.uuid4().hex[:10]
     log_dir = out_dir / "ui_logs"
     log_path = log_dir / f"{job_id}.log"
-    job = JobInfo(job_id=job_id, log_path=log_path)
+    job = JobInfo(job_id=job_id, log_path=log_path, out_dir=out_dir, cfg=cfg, argv=argv)
     job.force_cpu = _parse_bool(form.get("force_cpu"))
 
     with _jobs_lock:
         _jobs[job_id] = job
+    _save_job_state(job)
 
-    t = threading.Thread(target=_run_job, args=(job, args), daemon=True)
+    t = threading.Thread(target=_run_job, args=(job, argv), daemon=True)
     t.start()
 
     return JSONResponse({"job_id": job_id})
@@ -279,14 +419,11 @@ def job_status(job_id: str) -> JSONResponse:
     with _jobs_lock:
         job = _jobs.get(job_id)
     if not job:
-        return JSONResponse({"error": "job_not_found"}, status_code=404)
-    return JSONResponse({
-        "job_id": job.job_id,
-        "status": job.status,
-        "exit_code": job.exit_code,
-        "started_at": job.started_at,
-        "finished_at": job.finished_at,
-    })
+        state = _load_job_state(job_id)
+        if not state:
+            return JSONResponse({"error": "job_not_found"}, status_code=404)
+        return JSONResponse(_job_public_state(state))
+    return JSONResponse(_job_public_state(_job_state_dict(job)))
 
 
 @app.get("/api/jobs/{job_id}/log")
@@ -294,7 +431,13 @@ def job_log(job_id: str) -> PlainTextResponse:
     with _jobs_lock:
         job = _jobs.get(job_id)
     if not job:
-        return PlainTextResponse("job_not_found", status_code=404)
+        state = _load_job_state(job_id)
+        if not state:
+            return PlainTextResponse("job_not_found", status_code=404)
+        log_path = Path(state.get("log_path") or "")
+        if not log_path:
+            return PlainTextResponse("log_not_found", status_code=404)
+        return PlainTextResponse(_read_tail(log_path))
     return PlainTextResponse(_read_tail(job.log_path))
 
 
@@ -308,12 +451,17 @@ def stop_job(job_id: str) -> JSONResponse:
     with _jobs_lock:
         job = _jobs.get(job_id)
     if not job:
-        return JSONResponse({"error": "job_not_found"}, status_code=404)
+        state = _load_job_state(job_id)
+        if not state:
+            return JSONResponse({"error": "job_not_found"}, status_code=404)
+        return JSONResponse({"status": state.get("status"), "error": "job_not_running"}, status_code=409)
 
     if job.process and job.process.poll() is None:
         try:
             job.process.terminate()
             job.status = "stopped"
+            job.finished_at = _now_iso()
+            _save_job_state(job)
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 

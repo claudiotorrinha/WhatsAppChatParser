@@ -14,6 +14,7 @@ from .media import MediaProcessor
 from .output import write_outputs
 from .parser import count_total_messages, find_chat_txt, iter_messages
 from .report import write_report
+from .run_config import RunConfig
 from .transcribe import Transcriber
 from .util import fmt_eta, now_utc_iso
 from .ziputil import safe_extract_zip, find_export_root
@@ -113,9 +114,15 @@ def run(argv: list[str]) -> int:
     folder_in = args.folder
     if not folder_in:
         folder_in = input("Path to WhatsApp export folder OR .zip (txt + media): ").strip().strip('"')
+        args.folder = folder_in
 
-    folder_path = Path(folder_in).expanduser().resolve()
-    out_dir = Path(args.out).expanduser().resolve()
+    cfg = RunConfig.from_args(args)
+    errors = cfg.validate()
+    if errors:
+        raise SystemExit("Invalid config: " + "; ".join(errors))
+
+    folder_path = Path(cfg.folder).expanduser().resolve()
+    out_dir = Path(cfg.out).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Allow passing a WhatsApp export .zip directly.
@@ -123,7 +130,7 @@ def run(argv: list[str]) -> int:
         zip_path = folder_path
         extract_dir = out_dir / "_extracted" / zip_path.stem
 
-        if not args.quiet:
+        if not cfg.quiet:
             sys.stderr.write(f"Extracting zip to: {extract_dir}\n")
 
         safe_extract_zip(zip_path, extract_dir)
@@ -133,9 +140,9 @@ def run(argv: list[str]) -> int:
 
     chat_txt = find_chat_txt(folder)
 
-    resume = not args.no_resume
+    resume = not cfg.no_resume
 
-    manifest = ManifestLogger(out_dir / "manifest.jsonl", enabled=(not args.no_manifest))
+    manifest = ManifestLogger(out_dir / "manifest.jsonl", enabled=(not cfg.no_manifest))
     manifest.open()
 
     manifest.log({
@@ -144,30 +151,30 @@ def run(argv: list[str]) -> int:
         "export_folder": str(folder),
         "out_dir": str(out_dir),
         "resume": resume,
-        "format": args.format,
-        "date_order": args.date_order,
-        "audio_workers": args.audio_workers,
-        "ocr_workers": args.ocr_workers,
-        "convert_audio": args.convert_audio,
-        "transcribe": (not args.no_transcribe),
-        "transcribe_backend": args.transcribe_backend,
-        "whisper_model": args.whisper_model,
-        "lang": args.lang,
-        "ocr": (not args.no_ocr),
-        "ocr_mode": args.ocr_mode,
-        "ocr_max": args.ocr_max,
-        "tz": args.tz,
+        "format": cfg.format,
+        "date_order": cfg.date_order,
+        "audio_workers": cfg.audio_workers,
+        "ocr_workers": cfg.ocr_workers,
+        "convert_audio": cfg.convert_audio,
+        "transcribe": (not cfg.no_transcribe),
+        "transcribe_backend": cfg.transcribe_backend,
+        "whisper_model": cfg.whisper_model,
+        "lang": cfg.lang,
+        "ocr": (not cfg.no_ocr),
+        "ocr_mode": cfg.ocr_mode,
+        "ocr_max": cfg.ocr_max,
+        "tz": cfg.tz,
     })
 
     total_msgs = None
-    if not args.quiet:
-        total_msgs = count_total_messages(chat_txt, args.format, args.date_order)
+    if not cfg.quiet:
+        total_msgs = count_total_messages(chat_txt, cfg.format, cfg.date_order)
         sys.stderr.write(f"Chat file: {chat_txt.name}\n")
         sys.stderr.write(f"Detected messages: {total_msgs}\n")
 
     # Load messages into memory (for now) to allow multiple passes easily.
     # If this grows huge, we can stream with a lightweight index.
-    messages = list(iter_messages(chat_txt, tz_offset=args.tz, format_override=args.format, date_order_override=args.date_order))
+    messages = list(iter_messages(chat_txt, tz_offset=cfg.tz, format_override=cfg.format, date_order_override=cfg.date_order))
 
     # Gather media refs
     audio_files = sorted({m.file for msg in messages for m in msg.media if m.kind == "audio"})
@@ -193,12 +200,12 @@ def run(argv: list[str]) -> int:
 
     # Transcriber (quality-first)
     transcriber = None
-    if not args.no_transcribe and not args.only_ocr:
-        t = Transcriber(args.whisper_model, backend=args.transcribe_backend)
+    if not cfg.no_transcribe and not cfg.only_ocr:
+        t = Transcriber(cfg.whisper_model, backend=cfg.transcribe_backend)
         if t.available():
             transcriber = t
         else:
-            if not args.quiet:
+            if not cfg.quiet:
                 sys.stderr.write(
                     "WARNING: transcription enabled but no backend installed. Install openai-whisper (recommended).\n"
                 )
@@ -211,19 +218,19 @@ def run(argv: list[str]) -> int:
         resume=resume,
         manifest=manifest,
         stats=stats,
-        convert_audio=("none" if args.only_transcribe else args.convert_audio),
-        transcriber=(transcriber if not args.only_ocr else None),
-        transcribe_lang=args.lang,
-        ocr_enabled=(not args.no_ocr) and (not args.only_transcribe),
-        ocr_lang=args.ocr_lang,
-        ocr_mode=args.ocr_mode,
-        ocr_max=args.ocr_max,
-        ocr_edge_threshold=args.ocr_edge_threshold,
-        ocr_downscale=args.ocr_downscale,
-        hash_media=args.hash_media,
+        convert_audio=("none" if cfg.only_transcribe else cfg.convert_audio),
+        transcriber=(transcriber if not cfg.only_ocr else None),
+        transcribe_lang=cfg.lang,
+        ocr_enabled=(not cfg.no_ocr) and (not cfg.only_transcribe),
+        ocr_lang=cfg.ocr_lang,
+        ocr_mode=cfg.ocr_mode,
+        ocr_max=cfg.ocr_max,
+        ocr_edge_threshold=cfg.ocr_edge_threshold,
+        ocr_downscale=cfg.ocr_downscale,
+        hash_media=cfg.hash_media,
     )
 
-    if not args.quiet:
+    if not cfg.quiet:
         sys.stderr.write("Preprocessing media (resume-aware)...\n")
 
     t0 = time.time()
@@ -233,7 +240,7 @@ def run(argv: list[str]) -> int:
     current = {"audio": None, "image": None, "audio_start": None, "image_start": None}
 
     def log_line(msg: str) -> None:
-        if args.quiet:
+        if cfg.quiet:
             return
         with log_lock:
             sys.stderr.write(msg + "\n")
@@ -264,7 +271,7 @@ def run(argv: list[str]) -> int:
                 current["image_start"] = None
 
     # Limit tasks for only modes
-    if args.only_transcribe:
+    if cfg.only_transcribe:
         # Only process audios that are missing transcripts
         filtered = []
         for fn in audio_files:
@@ -276,7 +283,7 @@ def run(argv: list[str]) -> int:
         audio_files = filtered
         image_files = []
 
-    if args.only_ocr:
+    if cfg.only_ocr:
         # Only process images missing OCR
         filtered = []
         for fn in image_files:
@@ -288,8 +295,8 @@ def run(argv: list[str]) -> int:
         image_files = filtered
         audio_files = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.audio_workers)) as ex_a, \
-         concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.ocr_workers)) as ex_o:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, cfg.audio_workers)) as ex_a, \
+         concurrent.futures.ThreadPoolExecutor(max_workers=max(1, cfg.ocr_workers)) as ex_o:
 
         futs = []
         fut_meta: dict[concurrent.futures.Future, tuple[str, str]] = {}
@@ -306,12 +313,12 @@ def run(argv: list[str]) -> int:
 
         total_tasks = len(futs)
         done = 0
-        progress_every = max(1, int(args.progress_every))
+        progress_every = max(1, int(cfg.progress_every))
 
         heartbeat_stop = threading.Event()
 
         def heartbeat():
-            if args.quiet:
+            if cfg.quiet:
                 return
             while not heartbeat_stop.wait(30):
                 with done_lock:
@@ -344,7 +351,7 @@ def run(argv: list[str]) -> int:
                 done += 1
                 with done_lock:
                     done_ref["count"] = done
-                if not args.quiet:
+                if not cfg.quiet:
                     if done % progress_every == 0 or done == total_tasks:
                         kind, fn = fut_meta.get(fut, ("task", ""))
                         pct = (done / total_tasks * 100.0) if total_tasks else 100.0
@@ -360,23 +367,23 @@ def run(argv: list[str]) -> int:
     manifest.log({"type": "media_preprocess_done", "elapsed_seconds": preprocess_elapsed})
 
     # Outputs
-    if not args.quiet:
+    if not cfg.quiet:
         sys.stderr.write("Writing conversation outputs...\n")
 
     jsonl_path, md_path, by_month_dir = write_outputs(
         messages=messages,
         folder=folder,
         out_dir=out_dir,
-        md_max_chars=args.md_max_chars,
-        write_md=(not args.no_md),
-        write_by_month=(not args.no_by_month),
-        me=args.me,
-        them=args.them,
+        md_max_chars=cfg.md_max_chars,
+        write_md=(not cfg.no_md),
+        write_by_month=(not cfg.no_by_month),
+        me=cfg.me,
+        them=cfg.them,
         manifest=manifest,
     )
 
     # Report
-    if not args.no_report:
+    if not cfg.no_report:
         participants = sorted({m.sender for m in messages if m.sender})
         min_dt = None
         max_dt = None
@@ -394,17 +401,17 @@ def run(argv: list[str]) -> int:
             export_folder=folder,
             out_dir=out_dir,
             resume=resume,
-            tz=args.tz,
-            workers={"audio_workers": args.audio_workers, "ocr_workers": args.ocr_workers},
+            tz=cfg.tz,
+            workers={"audio_workers": cfg.audio_workers, "ocr_workers": cfg.ocr_workers},
             participants=participants,
-            me=args.me,
-            them=args.them,
+            me=cfg.me,
+            them=cfg.them,
             date_range=(min_dt, max_dt),
             outputs={
                 "conversation.jsonl": jsonl_path,
                 "transcript.md": md_path or "(disabled)",
                 "by-month": by_month_dir or "(disabled)",
-                "manifest.jsonl": (out_dir / "manifest.jsonl") if not args.no_manifest else "(disabled)",
+                "manifest.jsonl": (out_dir / "manifest.jsonl") if not cfg.no_manifest else "(disabled)",
             },
             stats=stats,
         )
@@ -413,11 +420,11 @@ def run(argv: list[str]) -> int:
     manifest.log({"type": "run_end", "elapsed_seconds": elapsed, "stats": stats})
     manifest.close()
 
-    if not args.quiet:
+    if not cfg.quiet:
         sys.stderr.write("Done.\n")
         sys.stderr.write(f"  Media preprocess: {fmt_eta(preprocess_elapsed)}\n")
         sys.stderr.write(f"  Outputs: {jsonl_path}\n")
-        sys.stderr.write(f"  Report: {out_dir / 'report.md'}\n" if not args.no_report else "")
+        sys.stderr.write(f"  Report: {out_dir / 'report.md'}\n" if not cfg.no_report else "")
 
     print(f"Wrote: {jsonl_path}")
     return 0
