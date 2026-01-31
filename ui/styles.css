@@ -131,6 +131,13 @@ body {
   margin: 0 0 12px;
 }
 
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+
 .grid {
   display: grid;
   gap: 12px;
@@ -171,6 +178,46 @@ body {
 .option {
   display: grid;
   gap: 6px;
+}
+
+.bench-models .label {
+  margin: 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.bench-model {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  color: var(--muted);
+}
+
+.bench-actions {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  background: rgba(47, 111, 117, 0.08);
+  border-radius: 14px;
+  padding: 12px;
+  border: 1px solid rgba(47, 111, 117, 0.2);
+}
+
+.bench-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.bench-buttons {
+  display: grid;
+  gap: 10px;
 }
 
 .helper {
@@ -333,6 +380,14 @@ body {
   border: 1px solid var(--outline);
 }
 
+.bench-card {
+  background: #f6efe6;
+  border-radius: var(--radius);
+  padding: 18px;
+  border: 1px solid rgba(44, 36, 28, 0.12);
+  box-shadow: var(--shadow);
+}
+
 .log-header {
   display: flex;
   align-items: baseline;
@@ -360,6 +415,62 @@ body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+#bench-log {
+  margin: 12px 0 0;
+  min-height: 140px;
+  max-height: 260px;
+  overflow: auto;
+  background: #1b1611;
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 0.78rem;
+  color: #f5efe6;
+  border: 1px solid rgba(44, 36, 28, 0.12);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.bench-results {
+  overflow-x: auto;
+}
+
+.bench-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.bench-table th,
+.bench-table td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid rgba(44, 36, 28, 0.12);
+}
+
+.bench-table thead {
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tag {
+  display: inline-flex;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  background: rgba(216, 107, 58, 0.15);
+  border: 1px solid rgba(216, 107, 58, 0.35);
+  color: #7a3a1c;
 }
 
 .hidden {

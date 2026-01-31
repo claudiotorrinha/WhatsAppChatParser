@@ -15,7 +15,9 @@ from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+from .benchmark import BenchmarkRequest, run_benchmark
 from .run_config import RunConfig
+from .ziputil import safe_extract_zip, find_export_root
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -24,6 +26,7 @@ DEFAULT_OUT_DIR = BASE_DIR / "out"
 JOB_DIR_NAME = "ui_jobs"
 LOG_MAX_BYTES = 5_000_000
 LOG_TRIM_BYTES = 2_000_000
+BENCH_STATE_DIR_NAME = "ui_benchmarks"
 
 
 class JobInfo:
@@ -41,11 +44,26 @@ class JobInfo:
         self.force_cpu = False
 
 
+class BenchInfo:
+    def __init__(self, bench_id: str, log_path: Path, result_path: Path, out_dir: Path):
+        self.bench_id = bench_id
+        self.log_path = log_path
+        self.result_path = result_path
+        self.out_dir = out_dir
+        self.status = "queued"
+        self.started_at: Optional[str] = None
+        self.finished_at: Optional[str] = None
+        self.error: Optional[str] = None
+        self.stop_event = threading.Event()
+
+
 app = FastAPI(title="WhatsApp Export UI")
 app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 _jobs: dict[str, JobInfo] = {}
 _jobs_lock = threading.Lock()
+_benchmarks: dict[str, BenchInfo] = {}
+_benchmarks_lock = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -67,6 +85,14 @@ def _job_state_path(job_id: str) -> Path:
     return _job_state_dir() / f"{job_id}.json"
 
 
+def _bench_state_dir() -> Path:
+    return DEFAULT_OUT_DIR / BENCH_STATE_DIR_NAME
+
+
+def _bench_state_path(bench_id: str) -> Path:
+    return _bench_state_dir() / f"{bench_id}.json"
+
+
 def _job_public_state(state: dict) -> dict:
     return {
         "job_id": state.get("job_id"),
@@ -74,6 +100,30 @@ def _job_public_state(state: dict) -> dict:
         "exit_code": state.get("exit_code"),
         "started_at": state.get("started_at"),
         "finished_at": state.get("finished_at"),
+    }
+
+
+def _bench_state_dict(bench: BenchInfo) -> dict:
+    return {
+        "bench_id": bench.bench_id,
+        "status": bench.status,
+        "started_at": bench.started_at,
+        "finished_at": bench.finished_at,
+        "log_path": str(bench.log_path),
+        "result_path": str(bench.result_path),
+        "out_dir": str(bench.out_dir),
+        "error": bench.error,
+        "updated_at": _now_iso(),
+    }
+
+
+def _bench_public_state(state: dict) -> dict:
+    return {
+        "bench_id": state.get("bench_id"),
+        "status": state.get("status"),
+        "started_at": state.get("started_at"),
+        "finished_at": state.get("finished_at"),
+        "error": state.get("error"),
     }
 
 
@@ -103,8 +153,27 @@ def _save_job_state(job: JobInfo) -> None:
     tmp.replace(path)
 
 
+def _save_bench_state(bench: BenchInfo) -> None:
+    path = _bench_state_path(bench.bench_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(_bench_state_dict(bench), f, indent=2, sort_keys=True)
+    tmp.replace(path)
+
+
 def _load_job_state(job_id: str) -> Optional[dict]:
     path = _job_state_path(job_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _load_bench_state(bench_id: str) -> Optional[dict]:
+    path = _bench_state_path(bench_id)
     if not path.exists():
         return None
     try:
@@ -249,6 +318,19 @@ def _check_transcribe_backend(cfg: RunConfig) -> Optional[str]:
     return None
 
 
+def _check_bench_backend(backend: str) -> Optional[str]:
+    info = _runtime_info()
+    openai_ok = bool(info.get("openai_whisper_available") or info.get("whisper_available"))
+    faster_ok = bool(info.get("faster_whisper_available"))
+    if backend == "openai" and not openai_ok:
+        return "OpenAI Whisper is not installed."
+    if backend == "faster" and not faster_ok:
+        return "Faster Whisper is not installed."
+    if backend == "auto" and not (openai_ok or faster_ok):
+        return "No transcription backend is installed."
+    return None
+
+
 def _trim_log(path: Path) -> None:
     if not path.exists():
         return
@@ -366,6 +448,34 @@ def _run_job(job: JobInfo, argv: list[str]) -> None:
         log_writer.close()
 
 
+def _run_benchmark_job(bench: BenchInfo, req: BenchmarkRequest) -> None:
+    bench.status = "running"
+    bench.started_at = _now_iso()
+    _save_bench_state(bench)
+    bench.log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_writer = _LogWriter(bench.log_path)
+
+    def log(msg: str) -> None:
+        log_writer.write(msg + "\n")
+
+    try:
+        result = run_benchmark(req, log, bench.stop_event)
+        bench.result_path.parent.mkdir(parents=True, exist_ok=True)
+        bench.result_path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+        if bench.stop_event.is_set():
+            bench.status = "stopped"
+        else:
+            bench.status = "done"
+    except Exception as e:
+        bench.status = "error"
+        bench.error = str(e)
+        log(f"ERROR: {e}")
+    finally:
+        bench.finished_at = _now_iso()
+        _save_bench_state(bench)
+        log_writer.close()
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(UI_DIR / "index.html")
@@ -414,6 +524,68 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
     return JSONResponse({"job_id": job_id})
 
 
+@app.post("/api/benchmark")
+async def run_benchmark_api(request: Request, zip: UploadFile = File(...)) -> JSONResponse:
+    form = await request.form()
+
+    out_dir_str = str(form.get("out") or "out")
+    out_dir = _resolve_out_dir(out_dir_str)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    uploads_dir = out_dir / "_uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    orig_name = Path(zip.filename or "export.zip").name
+    safe_name = f"{uuid.uuid4().hex}_{orig_name}"
+    zip_path = uploads_dir / safe_name
+    with zip_path.open("wb") as f:
+        f.write(await zip.read())
+
+    extract_dir = out_dir / "_bench_extracted" / zip_path.stem
+    safe_extract_zip(zip_path, extract_dir)
+    folder = find_export_root(extract_dir)
+
+    audio_samples = _parse_int(form.get("bench_audio_samples")) or 8
+    image_samples = _parse_int(form.get("bench_image_samples")) or 0
+    backend = str(form.get("bench_backend") or "auto")
+    lang = str(form.get("bench_lang") or "pt")
+    force_cpu = _parse_bool(form.get("bench_force_cpu"))
+
+    models = _parse_csv(form.get("bench_models"))
+    if not models:
+        models = ["base", "small", "medium"]
+
+    bench_error = _check_bench_backend(backend)
+    if bench_error:
+        return JSONResponse({"error": "backend_unavailable", "details": bench_error}, status_code=400)
+
+    req = BenchmarkRequest(
+        folder=folder,
+        out_dir=out_dir,
+        audio_samples=audio_samples,
+        image_samples=image_samples,
+        models=models,
+        backend=backend,
+        lang=lang,
+        include_ocr=_parse_bool(form.get("bench_include_ocr")),
+        force_cpu=force_cpu,
+    )
+
+    bench_id = uuid.uuid4().hex[:10]
+    log_dir = out_dir / "benchmarks"
+    log_path = log_dir / f"{bench_id}.log"
+    result_path = log_dir / f"{bench_id}.json"
+    bench = BenchInfo(bench_id=bench_id, log_path=log_path, result_path=result_path, out_dir=out_dir)
+
+    with _benchmarks_lock:
+        _benchmarks[bench_id] = bench
+    _save_bench_state(bench)
+
+    t = threading.Thread(target=_run_benchmark_job, args=(bench, req), daemon=True)
+    t.start()
+
+    return JSONResponse({"bench_id": bench_id})
+
+
 @app.get("/api/jobs/{job_id}")
 def job_status(job_id: str) -> JSONResponse:
     with _jobs_lock:
@@ -441,6 +613,50 @@ def job_log(job_id: str) -> PlainTextResponse:
     return PlainTextResponse(_read_tail(job.log_path))
 
 
+@app.get("/api/benchmarks/{bench_id}")
+def bench_status(bench_id: str) -> JSONResponse:
+    with _benchmarks_lock:
+        bench = _benchmarks.get(bench_id)
+    if not bench:
+        state = _load_bench_state(bench_id)
+        if not state:
+            return JSONResponse({"error": "bench_not_found"}, status_code=404)
+        return JSONResponse(_bench_public_state(state))
+    return JSONResponse(_bench_public_state(_bench_state_dict(bench)))
+
+
+@app.get("/api/benchmarks/{bench_id}/log")
+def bench_log(bench_id: str) -> PlainTextResponse:
+    with _benchmarks_lock:
+        bench = _benchmarks.get(bench_id)
+    if not bench:
+        state = _load_bench_state(bench_id)
+        if not state:
+            return PlainTextResponse("bench_not_found", status_code=404)
+        log_path = Path(state.get("log_path") or "")
+        if not log_path:
+            return PlainTextResponse("log_not_found", status_code=404)
+        return PlainTextResponse(_read_tail(log_path))
+    return PlainTextResponse(_read_tail(bench.log_path))
+
+
+@app.get("/api/benchmarks/{bench_id}/result")
+def bench_result(bench_id: str) -> JSONResponse:
+    with _benchmarks_lock:
+        bench = _benchmarks.get(bench_id)
+    if not bench:
+        state = _load_bench_state(bench_id)
+        if not state:
+            return JSONResponse({"error": "bench_not_found"}, status_code=404)
+        result_path = Path(state.get("result_path") or "")
+        if not result_path.exists():
+            return JSONResponse({"error": "result_not_ready"}, status_code=404)
+        return JSONResponse(json.loads(result_path.read_text(encoding="utf-8")))
+    if not bench.result_path.exists():
+        return JSONResponse({"error": "result_not_ready"}, status_code=404)
+    return JSONResponse(json.loads(bench.result_path.read_text(encoding="utf-8")))
+
+
 @app.get("/api/runtime")
 def runtime_info() -> JSONResponse:
     return JSONResponse(_runtime_info())
@@ -466,6 +682,22 @@ def stop_job(job_id: str) -> JSONResponse:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     return JSONResponse({"status": job.status})
+
+
+@app.post("/api/benchmarks/{bench_id}/stop")
+def stop_bench(bench_id: str) -> JSONResponse:
+    with _benchmarks_lock:
+        bench = _benchmarks.get(bench_id)
+    if not bench:
+        state = _load_bench_state(bench_id)
+        if not state:
+            return JSONResponse({"error": "bench_not_found"}, status_code=404)
+        return JSONResponse({"status": state.get("status"), "error": "bench_not_running"}, status_code=409)
+    bench.stop_event.set()
+    bench.status = "stopped"
+    bench.finished_at = _now_iso()
+    _save_bench_state(bench)
+    return JSONResponse({"status": bench.status})
 
 
 def main() -> None:

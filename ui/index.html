@@ -314,6 +314,88 @@
             </div>
           </div>
 
+          <div class="section benchmark">
+            <div class="section-header">
+              <h2>Benchmark</h2>
+              <p class="helper">Quickly test speed vs quality on a small sample.</p>
+            </div>
+            <div class="grid three">
+              <div class="field">
+                <md-filled-select label="Benchmark backend" id="bench_backend" name="bench_backend">
+                  <md-select-option value="auto" selected>Auto (all installed)</md-select-option>
+                  <md-select-option value="openai">OpenAI Whisper</md-select-option>
+                  <md-select-option value="faster">Faster Whisper</md-select-option>
+                </md-filled-select>
+                <p class="helper">Runs only the backends you’ve installed.</p>
+              </div>
+              <div class="field">
+                <md-filled-select label="Benchmark language" id="bench_lang" name="bench_lang">
+                  <md-select-option value="pt" selected>Portuguese</md-select-option>
+                  <md-select-option value="en">English</md-select-option>
+                  <md-select-option value="es">Spanish</md-select-option>
+                  <md-select-option value="fr">French</md-select-option>
+                </md-filled-select>
+                <p class="helper">Use the same language as your chat audio.</p>
+              </div>
+              <div class="option">
+                <div class="checkbox-row">
+                  <md-checkbox id="bench_force_cpu" name="bench_force_cpu"></md-checkbox>
+                  <label for="bench_force_cpu">Force CPU</label>
+                </div>
+                <p class="helper">Test CPU performance even if CUDA is available.</p>
+              </div>
+            </div>
+            <div class="grid three">
+              <div class="field">
+                <md-outlined-text-field label="Audio samples" type="number" id="bench_audio_samples" value="8"></md-outlined-text-field>
+                <p class="helper">Number of voice notes to test.</p>
+              </div>
+              <div class="field">
+                <md-outlined-text-field label="Image samples" type="number" id="bench_image_samples" value="0"></md-outlined-text-field>
+                <p class="helper">Set >0 to benchmark OCR speed.</p>
+              </div>
+              <div class="option">
+                <div class="checkbox-row">
+                  <md-checkbox id="bench_include_ocr" name="bench_include_ocr"></md-checkbox>
+                  <label for="bench_include_ocr">Include OCR</label>
+                </div>
+                <p class="helper">Adds OCR to the benchmark run.</p>
+              </div>
+            </div>
+            <div class="grid two">
+              <div class="field bench-models">
+                <p class="label">Models to test</p>
+                <div class="bench-model">
+                  <md-checkbox data-model="base" checked></md-checkbox>
+                  <span>base</span>
+                </div>
+                <div class="bench-model">
+                  <md-checkbox data-model="small" checked></md-checkbox>
+                  <span>small</span>
+                </div>
+                <div class="bench-model">
+                  <md-checkbox data-model="medium" checked></md-checkbox>
+                  <span>medium</span>
+                </div>
+                <div class="bench-model">
+                  <md-checkbox data-model="large-v3"></md-checkbox>
+                  <span>large-v3</span>
+                </div>
+                <p class="helper">Keep it small for fast feedback.</p>
+              </div>
+              <div class="bench-actions">
+                <div class="bench-status">
+                  <span>Benchmark status</span>
+                  <span id="bench-status" class="status">Idle</span>
+                </div>
+                <div class="bench-buttons">
+                  <md-filled-button type="button" id="bench-run">Run benchmark</md-filled-button>
+                  <md-outlined-button type="button" id="bench-stop" disabled>Stop benchmark</md-outlined-button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="section">
             <h2>Senders</h2>
             <div class="grid two">
@@ -399,6 +481,17 @@
               <span class="log-meta">Latest output</span>
             </div>
             <pre id="log-output">Ready.</pre>
+          </div>
+
+          <div class="card bench-card">
+            <div class="log-header">
+              <h3>Benchmark</h3>
+              <span class="log-meta" id="bench-summary">Waiting for a run.</span>
+            </div>
+            <div id="bench-results" class="bench-results">
+              <p class="helper">Run a benchmark to see speed vs quality tradeoffs.</p>
+            </div>
+            <pre id="bench-log">No benchmark yet.</pre>
           </div>
         </aside>
       </section>
