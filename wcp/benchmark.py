@@ -64,8 +64,12 @@ def _openai_transcribe(model, wav_path: Path, lang: str) -> tuple[str, Optional[
 
 def _load_faster_model(model_name: str, device: str):
     from faster_whisper import WhisperModel  # type: ignore
-    compute_type = "int8" if device == "cpu" else "float16"
-    return WhisperModel(model_name, device=device, compute_type=compute_type)
+    if device == "cpu":
+        return WhisperModel(model_name, device=device, compute_type="int8")
+    try:
+        return WhisperModel(model_name, device=device, compute_type="float16")
+    except Exception:
+        return WhisperModel(model_name, device=device, compute_type="int8")
 
 
 def _faster_transcribe(model, wav_path: Path, lang: str) -> tuple[str, Optional[float]]:
@@ -163,6 +167,7 @@ def _benchmark_ocr(
     log: LogFn,
     stop_flag,
 ) -> dict:
+    ocr_lang = _ocr_lang_for(lang)
     total_elapsed = 0.0
     errors = 0
     total_chars = 0
@@ -177,7 +182,7 @@ def _benchmark_ocr(
             continue
         t0 = time.time()
         try:
-            text = ocr_image(src, lang=lang)
+            text = ocr_image(src, lang=ocr_lang)
             total_chars += len(text or "")
         except Exception as e:
             log(f"[error] ocr failed: {file_name} ({e})")
@@ -195,7 +200,18 @@ def _benchmark_ocr(
         "errors": errors,
         "avg_seconds_per_sample": round(avg_elapsed, 3),
         "avg_chars": round(avg_chars, 1),
+        "lang": ocr_lang,
     }
+
+
+def _ocr_lang_for(lang: str) -> str:
+    mapping = {
+        "pt": "por",
+        "en": "eng",
+        "es": "spa",
+        "fr": "fra",
+    }
+    return mapping.get(lang, lang)
 
 
 def run_benchmark(
