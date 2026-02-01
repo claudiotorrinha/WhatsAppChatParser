@@ -40,9 +40,9 @@ def _pick_evenly(items: list[str], count: int) -> list[str]:
     return picked
 
 
-def sample_media(folder: Path, audio_n: int, image_n: int) -> tuple[list[str], list[str]]:
+def sample_media(folder: Path, audio_n: int, image_n: int, tz_offset: str = "+00:00") -> tuple[list[str], list[str]]:
     chat_txt = find_chat_txt(folder)
-    messages = list(iter_messages(chat_txt))
+    messages = list(iter_messages(chat_txt, tz_offset=tz_offset))
     audio_files = sorted({m.file for msg in messages for m in msg.media if m.kind == "audio"})
     image_files = sorted({m.file for msg in messages for m in msg.media if m.kind == "image"})
     return _pick_evenly(audio_files, audio_n), _pick_evenly(image_files, image_n)
@@ -211,7 +211,7 @@ def run_benchmark(
         except Exception:
             cuda_ok = False
 
-    audio_files, image_files = sample_media(req.folder, req.audio_samples, req.image_samples)
+    audio_files, image_files = sample_media(req.folder, req.audio_samples, req.image_samples, tz_offset="+00:00")
     log(f"Sampled {len(audio_files)} audio, {len(image_files)} image files.")
 
     results = []
