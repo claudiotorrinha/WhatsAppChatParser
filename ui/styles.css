@@ -492,6 +492,10 @@ details.advanced[open] > summary {
   overflow-x: auto;
 }
 
+.bench-disclaimer {
+  margin-top: 10px;
+}
+
 .bench-table {
   width: 100%;
   border-collapse: collapse;

@@ -273,6 +273,10 @@ const renderBenchResults = (data) => {
       </thead>
       <tbody>${rows}</tbody>
     </table>
+    <p class="helper bench-disclaimer">
+      Estimate is approximate: total audio time is inferred from the sampled clip lengths (not from scanning every file).
+      Increase sample count for better accuracy.
+    </p>
   `;
 
   if (benchSummary) {
