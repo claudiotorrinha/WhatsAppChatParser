@@ -132,6 +132,8 @@ def _benchmark_transcription(
     total_duration = 0.0
     logprobs: list[float] = []
     errors = 0
+    processed = 0
+    last_error: Optional[str] = None
 
     if backend == "openai":
         model = _load_openai_model(model_name, device)
@@ -140,6 +142,16 @@ def _benchmark_transcription(
         model = _load_faster_model(model_name, device)
         transcribe = lambda wav: _faster_transcribe(model, wav, lang)
 
+    def _maybe_cuda_cleanup() -> None:
+        if device != "cuda":
+            return
+        try:
+            import torch  # type: ignore
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     for idx, file_name in enumerate(audio_files, 1):
         if stop_flag.is_set():
             break
@@ -147,6 +159,7 @@ def _benchmark_transcription(
         if not src.exists():
             log(f"[skip] missing audio: {file_name}")
             errors += 1
+            last_error = "missing_audio"
             continue
         wav_path = wav_dir / (Path(file_name).stem + ".wav")
         if not wav_path.exists():
@@ -155,6 +168,7 @@ def _benchmark_transcription(
             except Exception as e:
                 log(f"[error] wav convert failed: {file_name} ({e})")
                 errors += 1
+                last_error = str(e)
                 continue
 
         duration = ffprobe_duration_seconds(wav_path) or 0.0
@@ -164,28 +178,38 @@ def _benchmark_transcription(
         except Exception as e:
             log(f"[error] transcribe failed: {file_name} ({e})")
             errors += 1
+            last_error = str(e)
+            _maybe_cuda_cleanup()
+            # CUDA errors often poison subsequent calls (OOM, cuDNN stream mismatch).
+            msg = str(e).lower()
+            if device == "cuda" and ("cuda error" in msg or "cudnn" in msg or "out of memory" in msg):
+                log("[warn] Aborting this config due to CUDA error.")
+                break
             continue
         elapsed = time.time() - t0
         total_elapsed += elapsed
         total_duration += duration
+        processed += 1
         if avg_logprob is not None:
             logprobs.append(avg_logprob)
         log(f"[ok] {idx}/{len(audio_files)} {file_name} in {elapsed:.2f}s (dur {duration:.1f}s)")
 
-    avg_elapsed = total_elapsed / len(audio_files) if audio_files else 0.0
-    avg_rtf = (total_duration / total_elapsed) if total_elapsed > 0 else 0.0
+    avg_elapsed = (total_elapsed / processed) if processed else None
+    avg_rtf = (total_duration / total_elapsed) if total_elapsed > 0 else None
     avg_logprob = sum(logprobs) / len(logprobs) if logprobs else None
-    avg_sample_duration = (total_duration / len(audio_files)) if audio_files else 0.0
+    avg_sample_duration = (total_duration / processed) if processed else None
 
     return {
         "backend": backend,
         "model": model_name,
         "device": device,
         "samples": len(audio_files),
+        "processed": processed,
         "errors": errors,
-        "avg_sample_duration_seconds": round(avg_sample_duration, 3),
-        "avg_seconds_per_sample": round(avg_elapsed, 3),
-        "avg_realtime_factor": round(avg_rtf, 3),
+        "error": last_error,
+        "avg_sample_duration_seconds": round(avg_sample_duration, 3) if avg_sample_duration is not None else None,
+        "avg_seconds_per_sample": round(avg_elapsed, 3) if avg_elapsed is not None else None,
+        "avg_realtime_factor": round(avg_rtf, 3) if avg_rtf is not None else None,
         "avg_logprob": round(avg_logprob, 4) if avg_logprob is not None else None,
     }
 
