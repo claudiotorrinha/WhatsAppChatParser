@@ -80,7 +80,7 @@ def build_arg_parser(config: dict) -> "argparse.ArgumentParser":
 
     ap.add_argument("--no-transcribe", action="store_true", default=bool(config.get("no_transcribe", False)),
                     help="Disable audio transcription")
-    ap.add_argument("--whisper-model", default=config.get("whisper_model", "small"),
+    ap.add_argument("--whisper-model", default=config.get("whisper_model", "medium"),
                     help="Whisper model name: tiny/base/small/medium/large-v3")
     ap.add_argument("--lang", default=config.get("lang", "pt"), help="Transcription language")
     ap.add_argument("--transcribe-backend", choices=["openai", "auto", "faster"], default=config.get("transcribe_backend", "openai"),

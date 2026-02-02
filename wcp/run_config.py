@@ -26,7 +26,7 @@ class RunConfig:
     them: list[str] = field(default_factory=list)
     convert_audio: str = "mp3"
     no_transcribe: bool = False
-    whisper_model: str = "small"
+    whisper_model: str = "medium"
     lang: str = "pt"
     transcribe_backend: str = "openai"
     no_ocr: bool = False
@@ -135,7 +135,7 @@ class RunConfig:
             argv += ["--convert-audio", self.convert_audio]
         if self.no_transcribe:
             argv.append("--no-transcribe")
-        if self.whisper_model != "small":
+        if self.whisper_model != "medium":
             argv += ["--whisper-model", self.whisper_model]
         if self.lang != "pt":
             argv += ["--lang", self.lang]
