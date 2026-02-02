@@ -24,7 +24,6 @@ class BenchmarkRequest:
     backend: str
     lang: str
     include_ocr: bool
-    force_cpu: bool
 
 
 def _pick_evenly(items: list[str], count: int) -> list[str]:
@@ -147,6 +146,7 @@ def _benchmark_transcription(
     avg_elapsed = total_elapsed / len(audio_files) if audio_files else 0.0
     avg_rtf = (total_duration / total_elapsed) if total_elapsed > 0 else 0.0
     avg_logprob = sum(logprobs) / len(logprobs) if logprobs else None
+    avg_sample_duration = (total_duration / len(audio_files)) if audio_files else 0.0
 
     return {
         "backend": backend,
@@ -154,6 +154,7 @@ def _benchmark_transcription(
         "device": device,
         "samples": len(audio_files),
         "errors": errors,
+        "avg_sample_duration_seconds": round(avg_sample_duration, 3),
         "avg_seconds_per_sample": round(avg_elapsed, 3),
         "avg_realtime_factor": round(avg_rtf, 3),
         "avg_logprob": round(avg_logprob, 4) if avg_logprob is not None else None,
@@ -220,18 +221,24 @@ def run_benchmark(
     stop_flag,
 ) -> dict:
     cuda_ok = False
-    if not req.force_cpu:
-        try:
-            import torch  # type: ignore
-            cuda_ok = bool(torch.cuda.is_available())
-        except Exception:
-            cuda_ok = False
+    try:
+        import torch  # type: ignore
+        cuda_ok = bool(torch.cuda.is_available())
+    except Exception:
+        cuda_ok = False
 
-    audio_files, image_files = sample_media(req.folder, req.audio_samples, req.image_samples, tz_offset="+00:00")
-    log(f"Sampled {len(audio_files)} audio, {len(image_files)} image files.")
+    devices = ["cpu"] + (["cuda"] if cuda_ok else [])
+
+    chat_txt = find_chat_txt(req.folder)
+    messages = list(iter_messages(chat_txt, tz_offset="+00:00"))
+    all_audio = sorted({m.file for msg in messages for m in msg.media if m.kind == "audio"})
+    all_images = sorted({m.file for msg in messages for m in msg.media if m.kind == "image"})
+
+    audio_files = _pick_evenly(all_audio, req.audio_samples)
+    image_files = _pick_evenly(all_images, req.image_samples)
+    log(f"Sampled {len(audio_files)} audio (of {len(all_audio)}), {len(image_files)} image (of {len(all_images)}).")
 
     results = []
-    device = "cuda" if cuda_ok else "cpu"
 
     backends = [req.backend]
     if req.backend == "auto":
@@ -239,25 +246,28 @@ def run_benchmark(
 
     for backend in backends:
         for model in req.models:
+            for device in devices:
+                if stop_flag.is_set():
+                    break
+                log(f"Benchmarking {backend}:{model} on {device}...")
+                try:
+                    results.append(
+                        _benchmark_transcription(
+                            req.folder,
+                            req.out_dir,
+                            audio_files,
+                            backend,
+                            model,
+                            req.lang,
+                            device,
+                            log,
+                            stop_flag,
+                        )
+                    )
+                except Exception as e:
+                    log(f"[error] benchmark failed for {backend}:{model} on {device} ({e})")
             if stop_flag.is_set():
                 break
-            log(f"Benchmarking {backend}:{model} on {device}...")
-            try:
-                results.append(
-                    _benchmark_transcription(
-                        req.folder,
-                        req.out_dir,
-                        audio_files,
-                        backend,
-                        model,
-                        req.lang,
-                        device,
-                        log,
-                        stop_flag,
-                    )
-                )
-            except Exception as e:
-                log(f"[error] benchmark failed for {backend}:{model} ({e})")
 
     ocr_result = None
     if req.include_ocr and image_files:
@@ -266,6 +276,33 @@ def run_benchmark(
             ocr_result = _benchmark_ocr(req.folder, image_files, req.lang, log, stop_flag)
         except Exception as e:
             log(f"[error] OCR benchmark failed ({e})")
+
+    # Use sampled audio durations to estimate total audio duration quickly.
+    sample_avg_dur = None
+    for r in results:
+        if r.get("avg_sample_duration_seconds"):
+            sample_avg_dur = r["avg_sample_duration_seconds"]
+            break
+    if sample_avg_dur is None:
+        sample_avg_dur = 0.0
+
+    est_total_audio_duration = float(sample_avg_dur) * float(len(all_audio))
+    est_total_ocr_seconds = None
+    if ocr_result and ocr_result.get("avg_seconds_per_sample") is not None:
+        est_total_ocr_seconds = float(ocr_result["avg_seconds_per_sample"]) * float(len(all_images))
+
+    # Attach estimates per config.
+    for r in results:
+        rtf = r.get("avg_realtime_factor") or 0.0
+        est_audio_seconds = (est_total_audio_duration / float(rtf)) if rtf > 0 else None
+        r["estimated_total_audio_seconds"] = round(est_audio_seconds, 1) if est_audio_seconds is not None else None
+        if est_total_ocr_seconds is not None:
+            r["estimated_total_ocr_seconds"] = round(est_total_ocr_seconds, 1)
+            if est_audio_seconds is not None:
+                r["estimated_total_audio_plus_ocr_seconds"] = round(est_audio_seconds + est_total_ocr_seconds, 1)
+        else:
+            r["estimated_total_ocr_seconds"] = None
+            r["estimated_total_audio_plus_ocr_seconds"] = None
 
     recommendations = {}
     valid = [r for r in results if r.get("avg_seconds_per_sample")]
@@ -285,9 +322,13 @@ def run_benchmark(
         "summary": {
             "audio_samples": len(audio_files),
             "image_samples": len(image_files),
+            "total_audio_files": len(all_audio),
+            "total_image_files": len(all_images),
             "backend_choice": req.backend,
             "models": req.models,
-            "device": device,
+            "devices_tested": devices,
+            "estimated_total_audio_duration_seconds": round(est_total_audio_duration, 1),
+            "estimated_total_ocr_seconds": round(est_total_ocr_seconds, 1) if est_total_ocr_seconds is not None else None,
         },
         "results": results,
         "ocr": ocr_result,

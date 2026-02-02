@@ -213,6 +213,15 @@ const renderBenchResults = (data) => {
   const balancedKey = rec.balanced ? recKey(rec.balanced) : null;
   const qualityKey = rec.highest_quality ? recKey(rec.highest_quality) : null;
 
+  const fmtHhMm = (secs) => {
+    if (secs === null || secs === undefined) return "-";
+    const s = Math.max(0, Math.round(Number(secs)));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
+
   const rows = results
     .map((r) => {
       const key = recKey(r);
@@ -221,6 +230,7 @@ const renderBenchResults = (data) => {
         key === balancedKey ? "<span class=\"tag\">Balanced</span>" : "",
         key === qualityKey ? "<span class=\"tag\">Best quality</span>" : "",
       ].join(" ");
+      const est = r.estimated_total_audio_plus_ocr_seconds ?? r.estimated_total_audio_seconds ?? null;
       return `
         <tr>
           <td>${r.backend}</td>
@@ -230,6 +240,7 @@ const renderBenchResults = (data) => {
           <td>${r.avg_realtime_factor ?? "-"}</td>
           <td>${r.avg_logprob ?? "-"}</td>
           <td>${r.errors ?? 0}</td>
+          <td>${fmtHhMm(est)}</td>
           <td class="tags">${tags}</td>
         </tr>
       `;
@@ -247,6 +258,7 @@ const renderBenchResults = (data) => {
           <th>RTF</th>
           <th>Logprob</th>
           <th>Errors</th>
+          <th>Est</th>
           <th>Pick</th>
         </tr>
       </thead>
@@ -256,7 +268,10 @@ const renderBenchResults = (data) => {
 
   if (benchSummary) {
     const summary = data.summary || {};
-    benchSummary.textContent = `Audio samples: ${summary.audio_samples ?? 0} • Device: ${summary.device ?? "cpu"} • Models: ${
+    const devices = (summary.devices_tested || []).join(", ") || "cpu";
+    const totalAudio = summary.total_audio_files ?? 0;
+    const totalImages = summary.total_image_files ?? 0;
+    benchSummary.textContent = `Samples: ${summary.audio_samples ?? 0} audio • Totals: ${totalAudio} audio / ${totalImages} images • Devices: ${devices} • Models: ${
       (summary.models || []).join(", ") || "n/a"
     }`;
   }
@@ -498,7 +513,6 @@ if (benchButton) {
     fd.append("bench_image_samples", id("bench_image_samples").value);
     fd.append("bench_backend", id("bench_backend").value);
     fd.append("bench_lang", id("bench_lang").value);
-    if (id("bench_force_cpu").checked) fd.append("bench_force_cpu", "true");
     if (id("bench_include_ocr").checked) fd.append("bench_include_ocr", "true");
 
     const models = collectBenchModels();

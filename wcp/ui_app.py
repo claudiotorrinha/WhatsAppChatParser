@@ -548,7 +548,6 @@ async def run_benchmark_api(request: Request, zip: UploadFile = File(...)) -> JS
     image_samples = _parse_int(form.get("bench_image_samples")) or 0
     backend = str(form.get("bench_backend") or "auto")
     lang = str(form.get("bench_lang") or "pt")
-    force_cpu = _parse_bool(form.get("bench_force_cpu"))
 
     models = _parse_csv(form.get("bench_models"))
     if not models:
@@ -567,7 +566,6 @@ async def run_benchmark_api(request: Request, zip: UploadFile = File(...)) -> JS
         backend=backend,
         lang=lang,
         include_ocr=_parse_bool(form.get("bench_include_ocr")),
-        force_cpu=force_cpu,
     )
 
     bench_id = uuid.uuid4().hex[:10]
