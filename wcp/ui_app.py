@@ -415,7 +415,10 @@ def _runtime_info() -> dict:
         "openai_whisper_available": whisper_available,
         "faster_whisper_available": faster_whisper_available,
         "windows_symlink_ok": windows_symlink_ok,
-        "faster_whisper_usable": bool(faster_whisper_available and (windows_symlink_ok in (None, True))),
+        # Even if symlinks aren't allowed, faster-whisper can work if the model is already cached.
+        # Downloads of *new* models may fail without Developer Mode/Admin on Windows.
+        "faster_whisper_usable": bool(faster_whisper_available),
+        "faster_whisper_download_may_need_symlink": bool(faster_whisper_available and windows_symlink_ok is False),
     }
 
 

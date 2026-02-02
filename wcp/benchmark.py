@@ -83,7 +83,16 @@ def _openai_transcribe(model, wav_path: Path, lang: str) -> tuple[str, Optional[
 def _load_faster_model(model_name: str, device: str):
     from faster_whisper import WhisperModel  # type: ignore
     if device == "cpu":
-        return WhisperModel(model_name, device=device, compute_type="int8")
+        try:
+            return WhisperModel(model_name, device=device, compute_type="int8")
+        except OSError as e:
+            # On Windows, Hugging Face cache may fail to create symlinks unless Developer Mode is enabled.
+            if getattr(e, "winerror", None) == 1314:
+                raise RuntimeError(
+                    "Faster Whisper model download failed on Windows due to missing symlink privileges. "
+                    "Enable Windows Developer Mode (recommended) or run Python as Administrator, then retry."
+                ) from e
+            raise
     try:
         return WhisperModel(model_name, device=device, compute_type="float16")
     except Exception:
@@ -272,9 +281,7 @@ def run_benchmark(
         # Benchmarking it on CUDA is misleading (and often unsupported depending on builds).
         devices = ["cpu"] if backend == "faster" else openai_devices
         if backend == "faster" and symlink_ok is False:
-            log("Skipping faster-whisper benchmark on Windows: symlink privilege is missing.")
-            log("Enable Windows Developer Mode or run Python as Administrator to allow Hugging Face cache symlinks.")
-            continue
+            log("NOTE: On Windows, faster-whisper model downloads may require Developer Mode or Admin privileges.")
         for model in req.models:
             for device in devices:
                 if stop_flag.is_set():
