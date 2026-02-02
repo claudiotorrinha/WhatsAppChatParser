@@ -142,6 +142,8 @@ const syncRuntime = async () => {
 
       const openaiOk = data.openai_whisper_available ?? data.whisper_available;
       const fasterOk = data.faster_whisper_available;
+      const fasterUsable = data.faster_whisper_usable ?? fasterOk;
+      const symlinkOk = data.windows_symlink_ok;
 
       if (openaiOpt) {
         openaiOpt.textContent = openaiOk ? "OpenAI Whisper (GPU if available)" : "OpenAI Whisper (not installed)";
@@ -149,9 +151,19 @@ const syncRuntime = async () => {
         else openaiOpt.removeAttribute("disabled");
       }
       if (fasterOpt) {
-        fasterOpt.textContent = fasterOk ? "Faster Whisper (CPU)" : "Faster Whisper (not installed)";
-        if (!fasterOk) fasterOpt.setAttribute("disabled", "");
-        else fasterOpt.removeAttribute("disabled");
+        if (!fasterOk) {
+          fasterOpt.textContent = "Faster Whisper (not installed)";
+          fasterOpt.setAttribute("disabled", "");
+        } else if (!fasterUsable) {
+          fasterOpt.textContent =
+            symlinkOk === false
+              ? "Faster Whisper (needs Windows Developer Mode/Admin)"
+              : "Faster Whisper (not usable)";
+          fasterOpt.setAttribute("disabled", "");
+        } else {
+          fasterOpt.textContent = "Faster Whisper (CPU)";
+          fasterOpt.removeAttribute("disabled");
+        }
       }
 
       if (!openaiOk && !fasterOk) {

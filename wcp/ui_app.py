@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+import tempfile
 import uuid
 from dataclasses import asdict
 from datetime import datetime
@@ -373,6 +374,7 @@ def _runtime_info() -> dict:
     torch_version: Optional[str] = None
     whisper_available = False
     faster_whisper_available = False
+    windows_symlink_ok: Optional[bool] = None
 
     try:
         import torch  # type: ignore
@@ -394,12 +396,26 @@ def _runtime_info() -> dict:
     except Exception:
         faster_whisper_available = False
 
+    if os.name == "nt":
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                base = Path(d)
+                target = base / "t.txt"
+                link = base / "l.txt"
+                target.write_text("x", encoding="utf-8")
+                os.symlink(str(target), str(link))
+            windows_symlink_ok = True
+        except Exception:
+            windows_symlink_ok = False
+
     return {
         "cuda_available": cuda_available,
         "torch_version": torch_version,
         "whisper_available": whisper_available,
         "openai_whisper_available": whisper_available,
         "faster_whisper_available": faster_whisper_available,
+        "windows_symlink_ok": windows_symlink_ok,
+        "faster_whisper_usable": bool(faster_whisper_available and (windows_symlink_ok in (None, True))),
     }
 
 

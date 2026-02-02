@@ -22,6 +22,8 @@ class TestUiApp(unittest.TestCase):
         self.assertIn("whisper_available", info)
         self.assertIn("openai_whisper_available", info)
         self.assertIn("faster_whisper_available", info)
+        self.assertIn("windows_symlink_ok", info)
+        self.assertIn("faster_whisper_usable", info)
 
 
 if __name__ == "__main__":

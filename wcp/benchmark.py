@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+import os
+import tempfile
+
 from .media import convert_to_wav
 from .media import ocr_image
 from .parser import find_chat_txt, iter_messages
@@ -24,6 +27,21 @@ class BenchmarkRequest:
     backend: str
     lang: str
     include_ocr: bool
+
+
+def _windows_symlink_ok() -> Optional[bool]:
+    if os.name != "nt":
+        return None
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            target = base / "t.txt"
+            link = base / "l.txt"
+            target.write_text("x", encoding="utf-8")
+            os.symlink(str(target), str(link))
+        return True
+    except Exception:
+        return False
 
 
 def _pick_evenly(items: list[str], count: int) -> list[str]:
@@ -247,10 +265,16 @@ def run_benchmark(
     if req.backend == "auto":
         backends = ["openai", "faster"]
 
+    symlink_ok = _windows_symlink_ok()
+
     for backend in backends:
         # In this application, faster-whisper is configured for CPU only.
         # Benchmarking it on CUDA is misleading (and often unsupported depending on builds).
         devices = ["cpu"] if backend == "faster" else openai_devices
+        if backend == "faster" and symlink_ok is False:
+            log("Skipping faster-whisper benchmark on Windows: symlink privilege is missing.")
+            log("Enable Windows Developer Mode or run Python as Administrator to allow Hugging Face cache symlinks.")
+            continue
         for model in req.models:
             for device in devices:
                 if stop_flag.is_set():
@@ -327,6 +351,7 @@ def run_benchmark(
             "backend_choice": req.backend,
             "models": req.models,
             "devices_tested": sorted({r.get("device") for r in results if r.get("device")}),
+            "windows_symlink_ok": symlink_ok,
             "estimated_total_audio_duration_seconds": round(est_total_audio_duration, 1),
             "estimated_total_ocr_seconds": round(est_total_ocr_seconds, 1) if est_total_ocr_seconds is not None else None,
         },
