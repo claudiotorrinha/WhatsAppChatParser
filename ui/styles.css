@@ -506,6 +506,12 @@ details.advanced[open] > summary {
   vertical-align: top;
 }
 
+.bench-table th.est,
+.bench-table td.est {
+  white-space: nowrap;
+  width: 1%;
+}
+
 .bench-table thead {
   text-transform: uppercase;
   font-size: 0.7rem;

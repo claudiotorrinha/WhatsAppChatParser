@@ -240,7 +240,7 @@ const renderBenchResults = (data) => {
           <td>${r.avg_realtime_factor ?? "-"}</td>
           <td>${r.avg_logprob ?? "-"}</td>
           <td>${r.errors ?? 0}</td>
-          <td>${fmtHhMm(est)}</td>
+          <td class="est">${fmtHhMm(est)}</td>
           <td class="tags">${tags}</td>
         </tr>
       `;
@@ -258,7 +258,7 @@ const renderBenchResults = (data) => {
           <th>RTF</th>
           <th>Logprob</th>
           <th>Errors</th>
-          <th>Est</th>
+          <th class="est">Est</th>
           <th>Pick</th>
         </tr>
       </thead>

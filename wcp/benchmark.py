@@ -230,7 +230,7 @@ def run_benchmark(
     except Exception:
         cuda_ok = False
 
-    devices = ["cpu"] + (["cuda"] if cuda_ok else [])
+    openai_devices = ["cpu"] + (["cuda"] if cuda_ok else [])
 
     chat_txt = find_chat_txt(req.folder)
     messages = list(iter_messages(chat_txt, tz_offset="+00:00"))
@@ -248,6 +248,9 @@ def run_benchmark(
         backends = ["openai", "faster"]
 
     for backend in backends:
+        # In this application, faster-whisper is configured for CPU only.
+        # Benchmarking it on CUDA is misleading (and often unsupported depending on builds).
+        devices = ["cpu"] if backend == "faster" else openai_devices
         for model in req.models:
             for device in devices:
                 if stop_flag.is_set():
@@ -281,13 +284,7 @@ def run_benchmark(
             log(f"[error] OCR benchmark failed ({e})")
 
     # Use sampled audio durations to estimate total audio duration quickly.
-    sample_avg_dur = None
-    for r in results:
-        if r.get("avg_sample_duration_seconds"):
-            sample_avg_dur = r["avg_sample_duration_seconds"]
-            break
-    if sample_avg_dur is None:
-        sample_avg_dur = 0.0
+    sample_avg_dur = next((r["avg_sample_duration_seconds"] for r in results if r.get("avg_sample_duration_seconds")), 0.0)
 
     est_total_audio_duration = float(sample_avg_dur) * float(len(all_audio))
     est_total_ocr_seconds = None
@@ -329,7 +326,7 @@ def run_benchmark(
             "total_image_files": len(all_images),
             "backend_choice": req.backend,
             "models": req.models,
-            "devices_tested": devices,
+            "devices_tested": sorted({r.get("device") for r in results if r.get("device")}),
             "estimated_total_audio_duration_seconds": round(est_total_audio_duration, 1),
             "estimated_total_ocr_seconds": round(est_total_ocr_seconds, 1) if est_total_ocr_seconds is not None else None,
         },
