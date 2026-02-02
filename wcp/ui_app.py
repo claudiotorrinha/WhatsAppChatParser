@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import signal
+
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +30,7 @@ JOB_DIR_NAME = "ui_jobs"
 LOG_MAX_BYTES = 5_000_000
 LOG_TRIM_BYTES = 2_000_000
 BENCH_STATE_DIR_NAME = "ui_benchmarks"
+STATE_INDEX_PATH = DEFAULT_OUT_DIR / "ui_state_index.json"
 
 
 class JobInfo:
@@ -79,6 +82,7 @@ def _resolve_out_dir(out_dir: str) -> Path:
 
 
 def _job_state_dir() -> Path:
+    # Legacy location (kept for backward compatibility only).
     return DEFAULT_OUT_DIR / JOB_DIR_NAME
 
 
@@ -87,11 +91,83 @@ def _job_state_path(job_id: str) -> Path:
 
 
 def _bench_state_dir() -> Path:
+    # Legacy location (kept for backward compatibility only).
     return DEFAULT_OUT_DIR / BENCH_STATE_DIR_NAME
 
 
 def _bench_state_path(bench_id: str) -> Path:
     return _bench_state_dir() / f"{bench_id}.json"
+
+
+def _load_state_index() -> dict:
+    if not STATE_INDEX_PATH.exists():
+        return {"jobs": {}, "benchmarks": {}}
+    try:
+        obj = json.loads(STATE_INDEX_PATH.read_text(encoding="utf-8"))
+        if not isinstance(obj, dict):
+            return {"jobs": {}, "benchmarks": {}}
+        obj.setdefault("jobs", {})
+        obj.setdefault("benchmarks", {})
+        if not isinstance(obj["jobs"], dict):
+            obj["jobs"] = {}
+        if not isinstance(obj["benchmarks"], dict):
+            obj["benchmarks"] = {}
+        return obj
+    except Exception:
+        return {"jobs": {}, "benchmarks": {}}
+
+
+def _save_state_index(index: dict) -> None:
+    STATE_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_INDEX_PATH.with_suffix(".json.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, indent=2, sort_keys=True)
+    tmp.replace(STATE_INDEX_PATH)
+
+
+def _index_job(job_id: str, *, out_dir: Path, state_path: Path, log_path: Path) -> None:
+    idx = _load_state_index()
+    idx["jobs"][job_id] = {
+        "out_dir": str(out_dir),
+        "state_path": str(state_path),
+        "log_path": str(log_path),
+        "updated_at": _now_iso(),
+    }
+    _save_state_index(idx)
+
+
+def _index_bench(bench_id: str, *, out_dir: Path, state_path: Path, log_path: Path, result_path: Path) -> None:
+    idx = _load_state_index()
+    idx["benchmarks"][bench_id] = {
+        "out_dir": str(out_dir),
+        "state_path": str(state_path),
+        "log_path": str(log_path),
+        "result_path": str(result_path),
+        "updated_at": _now_iso(),
+    }
+    _save_state_index(idx)
+
+
+def _resolve_job_state_path(job_id: str) -> Optional[Path]:
+    idx = _load_state_index()
+    rec = idx.get("jobs", {}).get(job_id)
+    if isinstance(rec, dict):
+        p = rec.get("state_path")
+        if isinstance(p, str) and p:
+            return Path(p)
+    legacy = _job_state_path(job_id)
+    return legacy if legacy.exists() else None
+
+
+def _resolve_bench_state_path(bench_id: str) -> Optional[Path]:
+    idx = _load_state_index()
+    rec = idx.get("benchmarks", {}).get(bench_id)
+    if isinstance(rec, dict):
+        p = rec.get("state_path")
+        if isinstance(p, str) and p:
+            return Path(p)
+    legacy = _bench_state_path(bench_id)
+    return legacy if legacy.exists() else None
 
 
 def _job_public_state(state: dict) -> dict:
@@ -146,26 +222,35 @@ def _job_state_dict(job: JobInfo) -> dict:
 
 
 def _save_job_state(job: JobInfo) -> None:
-    path = _job_state_path(job.job_id)
+    # Store state alongside the chosen output folder for coherence.
+    path = job.out_dir / JOB_DIR_NAME / f"{job.job_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(_job_state_dict(job), f, indent=2, sort_keys=True)
     tmp.replace(path)
+    _index_job(job.job_id, out_dir=job.out_dir, state_path=path, log_path=job.log_path)
 
 
 def _save_bench_state(bench: BenchInfo) -> None:
-    path = _bench_state_path(bench.bench_id)
+    path = bench.out_dir / BENCH_STATE_DIR_NAME / f"{bench.bench_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(_bench_state_dict(bench), f, indent=2, sort_keys=True)
     tmp.replace(path)
+    _index_bench(
+        bench.bench_id,
+        out_dir=bench.out_dir,
+        state_path=path,
+        log_path=bench.log_path,
+        result_path=bench.result_path,
+    )
 
 
 def _load_job_state(job_id: str) -> Optional[dict]:
-    path = _job_state_path(job_id)
-    if not path.exists():
+    path = _resolve_job_state_path(job_id)
+    if not path or not path.exists():
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -174,8 +259,8 @@ def _load_job_state(job_id: str) -> Optional[dict]:
 
 
 def _load_bench_state(bench_id: str) -> Optional[dict]:
-    path = _bench_state_path(bench_id)
-    if not path.exists():
+    path = _resolve_bench_state_path(bench_id)
+    if not path or not path.exists():
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -369,6 +454,20 @@ class _LogWriter:
             pass
 
 
+async def _save_upload_file(upload: UploadFile, dst: Path, chunk_size: int = 1024 * 1024) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with dst.open("wb") as f:
+        while True:
+            chunk = await upload.read(chunk_size)
+            if not chunk:
+                break
+            f.write(chunk)
+    try:
+        await upload.close()
+    except Exception:
+        pass
+
+
 def _runtime_info() -> dict:
     cuda_available: Optional[bool] = None
     torch_version: Optional[str] = None
@@ -439,6 +538,12 @@ def _run_job(job: JobInfo, argv: list[str]) -> None:
 
         log_writer.write(f"Command: {' '.join(cmd)}\n")
 
+        popen_kwargs = {}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
+
         job.process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -446,6 +551,7 @@ def _run_job(job: JobInfo, argv: list[str]) -> None:
             text=True,
             bufsize=1,
             env=env,
+            **popen_kwargs,
         )
         _save_job_state(job)
 
@@ -513,9 +619,7 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
     orig_name = Path(zip.filename or "export.zip").name
     safe_name = f"{uuid.uuid4().hex}_{orig_name}"
     zip_path = uploads_dir / safe_name
-
-    with zip_path.open("wb") as f:
-        f.write(await zip.read())
+    await _save_upload_file(zip, zip_path)
 
     cfg = _build_run_config(form, zip_path, out_dir_str)
     errors = cfg.validate()
@@ -556,8 +660,7 @@ async def run_benchmark_api(request: Request, zip: UploadFile = File(...)) -> JS
     orig_name = Path(zip.filename or "export.zip").name
     safe_name = f"{uuid.uuid4().hex}_{orig_name}"
     zip_path = uploads_dir / safe_name
-    with zip_path.open("wb") as f:
-        f.write(await zip.read())
+    await _save_upload_file(zip, zip_path)
 
     extract_dir = out_dir / "_bench_extracted" / zip_path.stem
     safe_extract_zip(zip_path, extract_dir)
@@ -691,7 +794,15 @@ def stop_job(job_id: str) -> JSONResponse:
 
     if job.process and job.process.poll() is None:
         try:
-            job.process.terminate()
+            pid = job.process.pid
+            if os.name == "nt":
+                # Kill the whole process tree (ffmpeg/whisper child processes).
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                try:
+                    os.killpg(pid, signal.SIGTERM)
+                except Exception:
+                    job.process.terminate()
             job.status = "stopped"
             job.finished_at = _now_iso()
             _save_job_state(job)

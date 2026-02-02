@@ -27,10 +27,10 @@ class RunConfig:
     convert_audio: str = "mp3"
     no_transcribe: bool = False
     whisper_model: str = "medium"
-    lang: str = "pt"
+    lang: str = "auto"
     transcribe_backend: str = "openai"
     no_ocr: bool = False
-    ocr_lang: str = "por"
+    ocr_lang: str = "auto"
     ocr_mode: str = "all"
     ocr_max: int = 0
     ocr_edge_threshold: float = 18.0
@@ -137,14 +137,14 @@ class RunConfig:
             argv.append("--no-transcribe")
         if self.whisper_model != "medium":
             argv += ["--whisper-model", self.whisper_model]
-        if self.lang != "pt":
+        if self.lang != "auto":
             argv += ["--lang", self.lang]
         if self.transcribe_backend != "openai":
             argv += ["--transcribe-backend", self.transcribe_backend]
 
         if self.no_ocr:
             argv.append("--no-ocr")
-        if self.ocr_lang != "por":
+        if self.ocr_lang != "auto":
             argv += ["--ocr-lang", self.ocr_lang]
         if self.ocr_mode != "all":
             argv += ["--ocr-mode", self.ocr_mode]

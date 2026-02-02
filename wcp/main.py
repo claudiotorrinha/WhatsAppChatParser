@@ -82,13 +82,13 @@ def build_arg_parser(config: dict) -> "argparse.ArgumentParser":
                     help="Disable audio transcription")
     ap.add_argument("--whisper-model", default=config.get("whisper_model", "medium"),
                     help="Whisper model name: tiny/base/small/medium/large-v3")
-    ap.add_argument("--lang", default=config.get("lang", "pt"), help="Transcription language")
+    ap.add_argument("--lang", default=config.get("lang", "auto"), help="Transcription language (or 'auto')")
     ap.add_argument("--transcribe-backend", choices=["openai", "auto", "faster"], default=config.get("transcribe_backend", "openai"),
                     help="Transcription backend (default openai)")
 
     ap.add_argument("--no-ocr", action="store_true", default=bool(config.get("no_ocr", False)),
                     help="Disable image OCR")
-    ap.add_argument("--ocr-lang", default=config.get("ocr_lang", "por"), help="Tesseract OCR language")
+    ap.add_argument("--ocr-lang", default=config.get("ocr_lang", "auto"), help="Tesseract OCR language (or 'auto')")
     ap.add_argument("--ocr-mode", choices=["all", "likely-text"], default=config.get("ocr_mode", "all"),
                     help="OCR mode")
     ap.add_argument("--ocr-max", type=int, default=int(config.get("ocr_max", 0)),

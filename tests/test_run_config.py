@@ -16,6 +16,8 @@ class TestRunConfig(unittest.TestCase):
         self.assertEqual(argv[1], "x")
         self.assertNotIn("--no-resume", argv)
         self.assertNotIn("--whisper-model", argv)
+        self.assertNotIn("--lang", argv)
+        self.assertNotIn("--ocr-lang", argv)
 
     def test_to_argv_custom(self):
         cfg = RunConfig(
