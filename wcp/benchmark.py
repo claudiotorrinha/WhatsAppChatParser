@@ -53,7 +53,8 @@ def _load_openai_model(model_name: str, device: str):
 
 
 def _openai_transcribe(model, wav_path: Path, lang: str) -> tuple[str, Optional[float]]:
-    result = model.transcribe(str(wav_path), language=lang)
+    language = None if lang == "auto" else lang
+    result = model.transcribe(str(wav_path), language=language)
     text = (result.get("text") or "").strip()
     segments = result.get("segments") or []
     logprobs = [seg.get("avg_logprob") for seg in segments if isinstance(seg, dict) and seg.get("avg_logprob") is not None]
@@ -72,7 +73,8 @@ def _load_faster_model(model_name: str, device: str):
 
 
 def _faster_transcribe(model, wav_path: Path, lang: str) -> tuple[str, Optional[float]]:
-    segments, _info = model.transcribe(str(wav_path), language=lang)
+    language = None if lang == "auto" else lang
+    segments, _info = model.transcribe(str(wav_path), language=language)
     texts = []
     logprobs: list[float] = []
     for seg in segments:
@@ -207,6 +209,7 @@ def _benchmark_ocr(
 
 def _ocr_lang_for(lang: str) -> str:
     mapping = {
+        "auto": "por+eng",
         "pt": "por",
         "en": "eng",
         "es": "spa",

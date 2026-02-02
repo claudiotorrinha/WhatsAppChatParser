@@ -141,6 +141,45 @@ body {
   padding-bottom: 0;
 }
 
+details.advanced {
+  margin-bottom: 22px;
+  border: 1px solid rgba(44, 36, 28, 0.12);
+  border-radius: var(--radius);
+  background: rgba(255, 249, 242, 0.55);
+  padding: 0 14px;
+}
+
+details.advanced > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 6px;
+  color: var(--ink);
+}
+
+details.advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary-title {
+  font-family: var(--font-head);
+  font-size: 1rem;
+}
+
+.summary-sub {
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-align: right;
+}
+
+details.advanced[open] > summary {
+  border-bottom: 1px dashed rgba(44, 36, 28, 0.12);
+  margin-bottom: 12px;
+}
+
 .section h2 {
   font-family: var(--font-head);
   font-size: 1.15rem;

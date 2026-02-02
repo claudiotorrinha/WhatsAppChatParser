@@ -42,8 +42,8 @@
       <section class="workspace">
         <div class="card form-card">
           <form id="run-form" class="form">
-          <div class="section">
-            <h2>Input</h2>
+          <div class="section basics">
+            <h2>Basics</h2>
             <div class="grid two">
               <div class="field">
                 <div class="file-picker">
@@ -53,6 +53,13 @@
                 </div>
                 <p class="helper">Pick the WhatsApp export zip you downloaded from the app.</p>
               </div>
+              <div class="field">
+                <md-outlined-text-field label="Output folder" id="out" name="out" value="out"></md-outlined-text-field>
+                <p class="helper">Where results are written on disk (defaults to ./out).</p>
+              </div>
+            </div>
+
+            <div class="grid two">
               <div class="field">
                 <md-filled-select label="Time zone offset" id="tz" name="tz">
                   <md-select-option value="+00:00" selected>UTC +00:00</md-select-option>
@@ -65,12 +72,68 @@
                 </md-filled-select>
                 <p class="helper">Sets the time zone shown in the final transcript.</p>
               </div>
+              <div class="field">
+                <md-filled-select label="OCR language" id="ocr_lang" name="ocr_lang">
+                  <md-select-option value="auto" selected>Auto (por+eng)</md-select-option>
+                  <md-select-option value="por">Portuguese</md-select-option>
+                  <md-select-option value="eng">English</md-select-option>
+                  <md-select-option value="spa">Spanish</md-select-option>
+                  <md-select-option value="fra">French</md-select-option>
+                </md-filled-select>
+                <p class="helper">Auto uses Portuguese + English for best coverage.</p>
+              </div>
             </div>
+
             <div class="grid two">
               <div class="field">
-                <md-outlined-text-field label="Output folder" id="out" name="out" value="out"></md-outlined-text-field>
-                <p class="helper">Where results are written on disk (defaults to ./out).</p>
+                <md-filled-select label="Whisper model" id="whisper_model" name="whisper_model">
+                  <md-select-option value="tiny">tiny</md-select-option>
+                  <md-select-option value="base">base</md-select-option>
+                  <md-select-option value="small" selected>small</md-select-option>
+                  <md-select-option value="medium">medium</md-select-option>
+                  <md-select-option value="large-v3">large-v3</md-select-option>
+                </md-filled-select>
+                <p class="helper">Bigger models are slower but more accurate.</p>
               </div>
+              <div class="field">
+                <md-filled-select label="Transcription language" id="lang" name="lang">
+                  <md-select-option value="auto" selected>Auto detect</md-select-option>
+                  <md-select-option value="pt">Portuguese</md-select-option>
+                  <md-select-option value="en">English</md-select-option>
+                  <md-select-option value="es">Spanish</md-select-option>
+                  <md-select-option value="fr">French</md-select-option>
+                </md-filled-select>
+                <p class="helper">Use auto unless the language is consistently wrong.</p>
+              </div>
+            </div>
+
+            <div class="grid two">
+              <div class="option">
+                <div class="checkbox-row">
+                  <md-checkbox id="no_transcribe" name="no_transcribe"></md-checkbox>
+                  <label for="no_transcribe">Disable transcription</label>
+                </div>
+                <p class="helper">Skip turning voice notes into text.</p>
+              </div>
+              <div class="option">
+                <div class="checkbox-row">
+                  <md-checkbox id="no_ocr" name="no_ocr"></md-checkbox>
+                  <label for="no_ocr">Disable OCR</label>
+                </div>
+                <p class="helper">Skip reading text from images.</p>
+              </div>
+            </div>
+          </div>
+
+          <details class="advanced">
+            <summary>
+              <span class="summary-title">Advanced</span>
+              <span class="summary-sub">Parsing, output formats, performance tuning, benchmarking.</span>
+            </summary>
+
+          <div class="section">
+            <h2>Parsing</h2>
+            <div class="grid three">
               <div class="field">
                 <md-filled-select label="Parse format" id="format" name="format">
                   <md-select-option value="auto" selected>Auto detect</md-select-option>
@@ -80,8 +143,6 @@
                 </md-filled-select>
                 <p class="helper">Use auto unless the parser guesses wrong.</p>
               </div>
-            </div>
-            <div class="grid two">
               <div class="field">
                 <md-filled-select label="Date order" id="date_order" name="date_order">
                   <md-select-option value="auto" selected>Auto detect</md-select-option>
@@ -149,13 +210,6 @@
             <div class="grid three">
               <div class="option">
                 <div class="checkbox-row">
-                  <md-checkbox id="no_transcribe" name="no_transcribe"></md-checkbox>
-                  <label for="no_transcribe">Disable transcription</label>
-                </div>
-                <p class="helper">Skip turning voice notes into text.</p>
-              </div>
-              <div class="option">
-                <div class="checkbox-row">
                   <md-checkbox id="only_transcribe" name="only_transcribe"></md-checkbox>
                   <label for="only_transcribe">Only transcribe</label>
                 </div>
@@ -176,7 +230,7 @@
                 <p class="helper">Useful for low‑VRAM GPUs or stability.</p>
               </div>
             </div>
-            <div class="grid three">
+            <div class="grid two">
               <div class="field">
                 <md-filled-select label="Convert audio" id="convert_audio" name="convert_audio">
                   <md-select-option value="mp3" selected>MP3</md-select-option>
@@ -193,27 +247,8 @@
                 </md-filled-select>
                 <p class="helper">Auto picks what is installed.</p>
               </div>
-              <div class="field">
-                <md-filled-select label="Whisper model" id="whisper_model" name="whisper_model">
-                  <md-select-option value="tiny">tiny</md-select-option>
-                  <md-select-option value="base">base</md-select-option>
-                  <md-select-option value="small" selected>small</md-select-option>
-                  <md-select-option value="medium">medium</md-select-option>
-                  <md-select-option value="large-v3">large-v3</md-select-option>
-                </md-filled-select>
-                <p class="helper">Bigger models are slower but more accurate.</p>
-              </div>
             </div>
             <div class="grid two">
-              <div class="field">
-                <md-filled-select label="Transcription language" id="lang" name="lang">
-                  <md-select-option value="pt" selected>Portuguese</md-select-option>
-                  <md-select-option value="en">English</md-select-option>
-                  <md-select-option value="es">Spanish</md-select-option>
-                  <md-select-option value="fr">French</md-select-option>
-                </md-filled-select>
-                <p class="helper">Language used to improve transcription accuracy.</p>
-              </div>
               <div class="field-toggle">
                 <div class="checkbox-row">
                   <md-checkbox id="progress_enabled" checked></md-checkbox>
@@ -230,13 +265,6 @@
             <div class="grid three">
               <div class="option">
                 <div class="checkbox-row">
-                  <md-checkbox id="no_ocr" name="no_ocr"></md-checkbox>
-                  <label for="no_ocr">Disable OCR</label>
-                </div>
-                <p class="helper">Skip reading text from images.</p>
-              </div>
-              <div class="option">
-                <div class="checkbox-row">
                   <md-checkbox id="only_ocr" name="only_ocr"></md-checkbox>
                   <label for="only_ocr">Only OCR</label>
                 </div>
@@ -250,22 +278,13 @@
                 <p class="helper">Adds file fingerprints for verification (slower).</p>
               </div>
             </div>
-            <div class="grid three">
+            <div class="grid two">
               <div class="field">
                 <md-filled-select label="OCR mode" id="ocr_mode" name="ocr_mode">
                   <md-select-option value="all" selected>All images</md-select-option>
                   <md-select-option value="likely-text">Likely text</md-select-option>
                 </md-filled-select>
                 <p class="helper">“Likely text” is faster for screenshots.</p>
-              </div>
-              <div class="field">
-                <md-filled-select label="OCR language" id="ocr_lang" name="ocr_lang">
-                  <md-select-option value="por" selected>Portuguese</md-select-option>
-                  <md-select-option value="eng">English</md-select-option>
-                  <md-select-option value="spa">Spanish</md-select-option>
-                  <md-select-option value="fra">French</md-select-option>
-                </md-filled-select>
-                <p class="helper">Language used to read text in images.</p>
               </div>
               <div class="field-toggle">
                 <div class="checkbox-row">
@@ -417,6 +436,8 @@
               </div>
             </div>
           </div>
+
+          </details>
 
           <div class="section actions">
             <div class="left">
