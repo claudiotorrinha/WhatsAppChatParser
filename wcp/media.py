@@ -15,9 +15,13 @@ from .util import (atomic_write_text, ffprobe_duration_seconds, image_dimensions
                    relpath_posix, sha256_file)
 
 
+def _tmp_path_for(dst: Path) -> Path:
+    return dst.with_name(dst.stem + ".tmp" + dst.suffix)
+
+
 def ffmpeg_to_tmp_then_replace(cmd: list[str], dst: Path) -> None:
     # Ensure atomic output: write to dst.tmp then rename.
-    tmp = dst.with_suffix(dst.suffix + ".tmp")
+    tmp = _tmp_path_for(dst)
     tmp.parent.mkdir(parents=True, exist_ok=True)
     if tmp.exists():
         try:
@@ -25,7 +29,12 @@ def ffmpeg_to_tmp_then_replace(cmd: list[str], dst: Path) -> None:
         except Exception:
             pass
     cmd = cmd[:-1] + [str(tmp)]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip()
+        if len(err) > 2000:
+            err = err[-2000:]
+        raise RuntimeError(f"ffmpeg failed (code {proc.returncode}). {err}")
     os.replace(tmp, dst)
 
 
@@ -97,7 +106,7 @@ class MediaProcessor:
         *,
         convert_audio: str,
         transcriber: Optional[Transcriber],
-        transcribe_lang: str,
+        transcribe_lang: Optional[str],
         ocr_enabled: bool,
         ocr_lang: str,
         ocr_mode: str,
@@ -156,9 +165,13 @@ class MediaProcessor:
                 self._inc("audio_mp3_skipped")
                 self.manifest.log({"type": "audio_mp3_skipped", "file": file_name, "out": relpath_posix(dst, self.out_dir)})
             else:
-                convert_to_mp3(src, dst)
-                self._inc("audio_mp3_created")
-                self.manifest.log({"type": "audio_mp3_created", "file": file_name, "out": relpath_posix(dst, self.out_dir)})
+                try:
+                    convert_to_mp3(src, dst)
+                    self._inc("audio_mp3_created")
+                    self.manifest.log({"type": "audio_mp3_created", "file": file_name, "out": relpath_posix(dst, self.out_dir)})
+                except Exception as e:
+                    self._inc("audio_mp3_failed")
+                    self.manifest.log({"type": "audio_mp3_failed", "file": file_name, "error": str(e)})
 
         elif self.convert_audio == "wav":
             dst = self.converted_dir / (stem + ".wav")
@@ -166,10 +179,14 @@ class MediaProcessor:
                 self._inc("audio_wav_skipped")
                 self.manifest.log({"type": "audio_wav_skipped", "file": file_name, "out": relpath_posix(dst, self.out_dir)})
             else:
-                convert_to_wav(src, dst)
-                self._inc("audio_wav_created")
-                wav_created_this_run = True
-                self.manifest.log({"type": "audio_wav_created", "file": file_name, "out": relpath_posix(dst, self.out_dir)})
+                try:
+                    convert_to_wav(src, dst)
+                    self._inc("audio_wav_created")
+                    wav_created_this_run = True
+                    self.manifest.log({"type": "audio_wav_created", "file": file_name, "out": relpath_posix(dst, self.out_dir)})
+                except Exception as e:
+                    self._inc("audio_wav_failed")
+                    self.manifest.log({"type": "audio_wav_failed", "file": file_name, "error": str(e)})
 
         # Transcript
         if self.transcriber is not None:
@@ -182,10 +199,15 @@ class MediaProcessor:
             try:
                 wav = self.converted_dir / (stem + ".wav")
                 if (not wav.exists()) or (not self.resume and not wav_created_this_run):
-                    convert_to_wav(src, wav)
-                    self._inc("audio_wav_created")
-                    wav_created_this_run = True
-                    self.manifest.log({"type": "audio_wav_created", "file": file_name, "out": relpath_posix(wav, self.out_dir)})
+                    try:
+                        convert_to_wav(src, wav)
+                        self._inc("audio_wav_created")
+                        wav_created_this_run = True
+                        self.manifest.log({"type": "audio_wav_created", "file": file_name, "out": relpath_posix(wav, self.out_dir)})
+                    except Exception as e:
+                        self._inc("audio_wav_failed")
+                        self.manifest.log({"type": "audio_wav_failed", "file": file_name, "error": str(e)})
+                        return
                 else:
                     self._inc("audio_wav_skipped")
 
