@@ -13,6 +13,12 @@ const ocrPreview = document.getElementById("ocr-preview");
 const transcribePreview = document.getElementById("transcribe-preview");
 const cudaPreview = document.getElementById("cuda-preview");
 const elapsedPreview = document.getElementById("elapsed-preview");
+const benchButton = document.getElementById("bench-run");
+const benchStop = document.getElementById("bench-stop");
+const benchStatus = document.getElementById("bench-status");
+const benchLog = document.getElementById("bench-log");
+const benchResults = document.getElementById("bench-results");
+const benchSummary = document.getElementById("bench-summary");
 
 const id = (name) => document.getElementById(name);
 
@@ -136,6 +142,9 @@ const syncRuntime = async () => {
 
       const openaiOk = data.openai_whisper_available ?? data.whisper_available;
       const fasterOk = data.faster_whisper_available;
+      const fasterUsable = data.faster_whisper_usable ?? fasterOk;
+      const symlinkOk = data.windows_symlink_ok;
+      const fasterDownloadWarn = data.faster_whisper_download_may_need_symlink ?? false;
 
       if (openaiOpt) {
         openaiOpt.textContent = openaiOk ? "OpenAI Whisper (GPU if available)" : "OpenAI Whisper (not installed)";
@@ -143,9 +152,15 @@ const syncRuntime = async () => {
         else openaiOpt.removeAttribute("disabled");
       }
       if (fasterOpt) {
-        fasterOpt.textContent = fasterOk ? "Faster Whisper (CPU)" : "Faster Whisper (not installed)";
-        if (!fasterOk) fasterOpt.setAttribute("disabled", "");
-        else fasterOpt.removeAttribute("disabled");
+        if (!fasterOk) {
+          fasterOpt.textContent = "Faster Whisper (not installed)";
+          fasterOpt.setAttribute("disabled", "");
+        } else {
+          fasterOpt.textContent = fasterDownloadWarn
+            ? "Faster Whisper (CPU) — downloads may need Developer Mode"
+            : "Faster Whisper (CPU)";
+          fasterOpt.removeAttribute("disabled");
+        }
       }
 
       if (!openaiOk && !fasterOk) {
@@ -162,10 +177,117 @@ syncRuntime();
 let poller = null;
 let currentJobId = null;
 let elapsedTimer = null;
+let benchPoller = null;
+let currentBenchId = null;
 
 const setStopEnabled = (enabled) => {
   if (!stopBtn) return;
   stopBtn.disabled = !enabled;
+};
+
+const setBenchStopEnabled = (enabled) => {
+  if (!benchStop) return;
+  benchStop.disabled = !enabled;
+};
+
+const setBenchStatus = (text, tone) => {
+  if (!benchStatus) return;
+  benchStatus.textContent = text;
+  benchStatus.style.borderColor = tone || "var(--outline)";
+};
+
+const collectBenchModels = () => {
+  const checks = document.querySelectorAll(".bench-model md-checkbox");
+  const models = [];
+  checks.forEach((cb) => {
+    if (cb.checked) {
+      const model = cb.getAttribute("data-model");
+      if (model) models.push(model);
+    }
+  });
+  return models;
+};
+
+const renderBenchResults = (data) => {
+  if (!benchResults) return;
+  const results = data.results || [];
+  if (!results.length) {
+    benchResults.innerHTML = "<p class=\"helper\">No benchmark results yet.</p>";
+    return;
+  }
+
+  const rec = data.recommendations || {};
+  const recKey = (obj) => `${obj.backend}:${obj.model}:${obj.device}`;
+  const fastestKey = rec.fastest ? recKey(rec.fastest) : null;
+  const balancedKey = rec.balanced ? recKey(rec.balanced) : null;
+  const qualityKey = rec.highest_quality ? recKey(rec.highest_quality) : null;
+
+  const fmtHhMm = (secs) => {
+    if (secs === null || secs === undefined) return "-";
+    const s = Math.max(0, Math.round(Number(secs)));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
+
+  const rows = results
+    .map((r) => {
+      const key = recKey(r);
+      const tags = [
+        key === fastestKey ? "<span class=\"tag\">Fastest</span>" : "",
+        key === balancedKey ? "<span class=\"tag\">Balanced</span>" : "",
+        key === qualityKey ? "<span class=\"tag\">Best quality</span>" : "",
+      ].join(" ");
+      const est = r.estimated_total_audio_plus_ocr_seconds ?? r.estimated_total_audio_seconds ?? null;
+      return `
+        <tr>
+          <td>${r.backend}</td>
+          <td>${r.model}</td>
+          <td>${r.device}</td>
+          <td>${r.avg_seconds_per_sample ?? "-"}</td>
+          <td>${r.avg_realtime_factor ?? "-"}</td>
+          <td>${r.avg_logprob ?? "-"}</td>
+          <td>${r.errors ?? 0}</td>
+          <td class="est">${fmtHhMm(est)}</td>
+          <td class="tags">${tags}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  benchResults.innerHTML = `
+    <table class="bench-table">
+      <thead>
+        <tr>
+          <th>Backend</th>
+          <th>Model</th>
+          <th>Device</th>
+          <th>Sec / sample</th>
+          <th>RTF</th>
+          <th>Logprob</th>
+          <th>Errors</th>
+          <th class="est">Est</th>
+          <th>Pick</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="helper bench-disclaimer">
+      Estimate is approximate: total audio time is inferred from the sampled clip lengths (not from scanning every file).
+      Increase sample count for better accuracy.
+    </p>
+  `;
+
+  if (benchSummary) {
+    const summary = data.summary || {};
+    const devices = (summary.devices_tested || []).join(", ") || "cpu";
+    const totalAudio = summary.total_audio_files ?? 0;
+    const totalImages = summary.total_image_files ?? 0;
+    benchSummary.textContent = `Samples: ${summary.audio_samples ?? 0} audio • Totals: ${totalAudio} audio / ${totalImages} images • Devices: ${devices} • Models: ${
+      (summary.models || []).join(", ") || "n/a"
+    }`;
+  }
 };
 
 const pollJob = (jobId) => {
@@ -319,6 +441,52 @@ form.addEventListener("submit", async (event) => {
   pollJob(data.job_id);
 });
 
+const pollBenchmark = (benchId) => {
+  if (benchPoller) clearInterval(benchPoller);
+  currentBenchId = benchId;
+  setBenchStopEnabled(true);
+  setBenchStatus("Running", "rgba(61, 214, 197, 0.5)");
+  if (benchLog) benchLog.textContent = "Benchmark started...";
+
+  const tick = async () => {
+    try {
+      const statusRes = await fetch(`/api/benchmarks/${benchId}`);
+      if (!statusRes.ok) return;
+      const status = await statusRes.json();
+      const logRes = await fetch(`/api/benchmarks/${benchId}/log`);
+      const logText = await logRes.text();
+      if (benchLog) {
+        benchLog.textContent = logText || "Benchmark running...";
+        benchLog.scrollTop = benchLog.scrollHeight;
+      }
+
+      if (status.status === "done") {
+        setBenchStatus("Done", "rgba(61, 214, 197, 0.6)");
+        clearInterval(benchPoller);
+        setBenchStopEnabled(false);
+        const res = await fetch(`/api/benchmarks/${benchId}/result`);
+        if (res.ok) {
+          const data = await res.json();
+          renderBenchResults(data);
+        }
+      } else if (status.status === "error") {
+        setBenchStatus("Error", "rgba(243, 179, 76, 0.7)");
+        clearInterval(benchPoller);
+        setBenchStopEnabled(false);
+      } else if (status.status === "stopped") {
+        setBenchStatus("Stopped", "rgba(243, 179, 76, 0.7)");
+        clearInterval(benchPoller);
+        setBenchStopEnabled(false);
+      }
+    } catch (err) {
+      if (benchLog) benchLog.textContent = `Error fetching benchmark status: ${err}`;
+    }
+  };
+
+  tick();
+  benchPoller = setInterval(tick, 2000);
+};
+
 resetBtn.addEventListener("click", () => {
   form.reset();
   zipDisplay.value = "";
@@ -339,6 +507,58 @@ if (stopBtn) {
       await fetch(`/api/jobs/${currentJobId}/stop`, { method: "POST" });
     } catch (err) {
       logOutput.textContent = `Error stopping job: ${err}`;
+    }
+  });
+}
+
+if (benchButton) {
+  benchButton.addEventListener("click", async () => {
+    if (!zipInput.files || !zipInput.files[0]) {
+      setBenchStatus("Zip required", "rgba(243, 179, 76, 0.7)");
+      return;
+    }
+
+    const fd = new FormData();
+    fd.append("zip", zipInput.files[0]);
+    fd.append("out", id("out").value);
+
+    fd.append("bench_audio_samples", id("bench_audio_samples").value);
+    fd.append("bench_image_samples", id("bench_image_samples").value);
+    fd.append("bench_backend", id("bench_backend").value);
+    fd.append("bench_lang", id("bench_lang").value);
+    if (id("bench_include_ocr").checked) fd.append("bench_include_ocr", "true");
+
+    const models = collectBenchModels();
+    if (models.length) fd.append("bench_models", models.join(","));
+
+    setBenchStatus("Starting...", "rgba(61, 214, 197, 0.5)");
+    if (benchLog) benchLog.textContent = "Starting benchmark...";
+
+    const res = await fetch("/api/benchmark", {
+      method: "POST",
+      body: fd,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      if (benchLog) benchLog.textContent = text || "Failed to start benchmark";
+      setBenchStatus("Failed", "rgba(243, 179, 76, 0.7)");
+      return;
+    }
+
+    const data = await res.json();
+    pollBenchmark(data.bench_id);
+  });
+}
+
+if (benchStop) {
+  benchStop.addEventListener("click", async () => {
+    if (!currentBenchId) return;
+    setBenchStatus("Stopping...", "rgba(243, 179, 76, 0.7)");
+    try {
+      await fetch(`/api/benchmarks/${currentBenchId}/stop`, { method: "POST" });
+    } catch (err) {
+      if (benchLog) benchLog.textContent = `Error stopping benchmark: ${err}`;
     }
   });
 }

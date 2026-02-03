@@ -6,7 +6,7 @@ Runs locally on your machine.
 ## Quick start (UI - recommended)
 ### Windows (PowerShell)
 ```powershell
-cd C:\Personal Projects\WhatsAppExtractor
+# In the repo folder (where install.ps1 lives)
 Set-ExecutionPolicy -Scope Process Bypass
 .\install.ps1
 .venv\Scripts\Activate.ps1
@@ -16,7 +16,7 @@ Open: http://127.0.0.1:8000
 
 ### macOS / Linux
 ```bash
-cd /path/to/WhatsAppExtractor
+# In the repo folder (where install.sh lives)
 chmod +x install.sh
 ./install.sh
 source .venv/bin/activate
@@ -38,6 +38,14 @@ The installers can guide you through installing these.
 2. Keep defaults unless you know you need changes.
 3. Click Run pipeline.
 4. Outputs appear in the out/ folder by default.
+
+### Basics vs Advanced
+- Basics shows the settings most people need (output folder, Whisper model, language, OCR).
+- Advanced contains parsing overrides, performance tuning, benchmarking, and power-user controls.
+
+### Benchmark
+Use the Benchmark section (Advanced) to compare speed vs quality on a small sample of your export.
+It also shows a rough estimate of total processing time (sample-based).
 
 ## Outputs
 - out/conversation.jsonl - canonical dataset (one JSON object per message)
@@ -63,6 +71,10 @@ python whatsapp_export_to_jsonl.py --tz +00:00
   python -c "import whisper; print('whisper ok')"
   ```
 - Make sure Disable transcription is unchecked in the UI.
+
+### Faster Whisper fails downloading models on Windows (WinError 1314)
+This can happen when Windows blocks symlink creation in the Hugging Face cache.
+Fix it by either enabling Windows Developer Mode (recommended) or running PowerShell as Administrator.
 
 ### OCR not working
 - Ensure tesseract is installed and on PATH.

@@ -106,7 +106,7 @@ class MediaProcessor:
         *,
         convert_audio: str,
         transcriber: Optional[Transcriber],
-        transcribe_lang: str,
+        transcribe_lang: Optional[str],
         ocr_enabled: bool,
         ocr_lang: str,
         ocr_mode: str,
