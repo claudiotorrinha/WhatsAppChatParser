@@ -16,14 +16,19 @@
 - [x] Persist UI job state to disk for refresh-safe status.
 - [x] Guard transcription backend selection in the UI.
 - [x] Cap UI log size and trim safely.
+- [x] Stream zip uploads to disk (avoid loading large uploads into RAM).
+- [x] Stop/abort terminates process trees (ffmpeg/whisper child processes).
+- [x] Align UI/CLI defaults for transcription and OCR language (auto-friendly).
 - [ ] Add explicit errors for missing media or permissions.
 - [ ] Expand parser fixtures (PT/EN/iOS/Android edge cases).
 
 ## Phase 2 — Observability and UX clarity
+- [x] Basics vs Advanced UI layout to reduce option overload.
+- [x] Benchmark mode (sample-based speed/quality + estimate).
 - [ ] Job history view (last N runs, status, outputs).
 - [ ] Per-step progress summaries (audio/ocr/output phases).
-- [ ] Clear end-state callouts with next actions.
-- [ ] Surface backend availability directly in settings.
+- [x] Clear run end-state callouts (idle/running/done/error).
+- [x] Surface backend availability directly in settings.
 
 ## Phase 3 — Performance and scale
 - [ ] Stream messages instead of loading full chat into memory.

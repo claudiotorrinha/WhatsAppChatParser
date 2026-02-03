@@ -6,7 +6,7 @@ Runs locally on your machine.
 ## Quick start (UI - recommended)
 ### Windows (PowerShell)
 ```powershell
-cd C:\Personal Projects\WhatsAppExtractor
+# In the repo folder (where install.ps1 lives)
 Set-ExecutionPolicy -Scope Process Bypass
 .\install.ps1
 .venv\Scripts\Activate.ps1
@@ -16,7 +16,7 @@ Open: http://127.0.0.1:8000
 
 ### macOS / Linux
 ```bash
-cd /path/to/WhatsAppExtractor
+# In the repo folder (where install.sh lives)
 chmod +x install.sh
 ./install.sh
 source .venv/bin/activate
