@@ -81,9 +81,9 @@ def build_arg_parser(config: dict) -> "argparse.ArgumentParser":
     ap.add_argument("--no-transcribe", action="store_true", default=bool(config.get("no_transcribe", False)),
                     help="Disable audio transcription")
     ap.add_argument("--whisper-model", default=config.get("whisper_model", "medium"),
-                    help="Whisper model name: tiny/base/small/medium/large-v3")
+                    help="Whisper model name: tiny/base/small/medium/large-v3/large-v3-turbo (or HF repo id)")
     ap.add_argument("--lang", default=config.get("lang", "auto"), help="Transcription language (or 'auto')")
-    ap.add_argument("--transcribe-backend", choices=["openai", "auto", "faster"], default=config.get("transcribe_backend", "openai"),
+    ap.add_argument("--transcribe-backend", choices=["openai", "auto", "faster", "hf"], default=config.get("transcribe_backend", "openai"),
                     help="Transcription backend (default openai)")
 
     ap.add_argument("--no-ocr", action="store_true", default=bool(config.get("no_ocr", False)),

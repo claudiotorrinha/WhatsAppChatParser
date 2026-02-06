@@ -394,12 +394,15 @@ def _check_transcribe_backend(cfg: RunConfig) -> Optional[str]:
     info = _runtime_info()
     openai_ok = bool(info.get("openai_whisper_available") or info.get("whisper_available"))
     faster_ok = bool(info.get("faster_whisper_available"))
+    hf_ok = bool(info.get("transformers_available"))
     backend = cfg.transcribe_backend
     if backend == "openai" and not openai_ok:
         return "OpenAI Whisper is not installed."
     if backend == "faster" and not faster_ok:
         return "Faster Whisper is not installed."
-    if backend == "auto" and not (openai_ok or faster_ok):
+    if backend == "hf" and not hf_ok:
+        return "Transformers (HF) is not installed."
+    if backend == "auto" and not (openai_ok or faster_ok or hf_ok):
         return "No transcription backend is installed."
     return None
 
@@ -408,11 +411,14 @@ def _check_bench_backend(backend: str) -> Optional[str]:
     info = _runtime_info()
     openai_ok = bool(info.get("openai_whisper_available") or info.get("whisper_available"))
     faster_ok = bool(info.get("faster_whisper_available"))
+    hf_ok = bool(info.get("transformers_available"))
     if backend == "openai" and not openai_ok:
         return "OpenAI Whisper is not installed."
     if backend == "faster" and not faster_ok:
         return "Faster Whisper is not installed."
-    if backend == "auto" and not (openai_ok or faster_ok):
+    if backend == "hf" and not hf_ok:
+        return "Transformers (HF) is not installed."
+    if backend == "auto" and not (openai_ok or faster_ok or hf_ok):
         return "No transcription backend is installed."
     return None
 
@@ -473,6 +479,7 @@ def _runtime_info() -> dict:
     torch_version: Optional[str] = None
     whisper_available = False
     faster_whisper_available = False
+    transformers_available = False
     windows_symlink_ok: Optional[bool] = None
 
     try:
@@ -495,6 +502,12 @@ def _runtime_info() -> dict:
     except Exception:
         faster_whisper_available = False
 
+    try:
+        import transformers  # type: ignore
+        transformers_available = True
+    except Exception:
+        transformers_available = False
+
     if os.name == "nt":
         try:
             with tempfile.TemporaryDirectory() as d:
@@ -513,6 +526,7 @@ def _runtime_info() -> dict:
         "whisper_available": whisper_available,
         "openai_whisper_available": whisper_available,
         "faster_whisper_available": faster_whisper_available,
+        "transformers_available": transformers_available,
         "windows_symlink_ok": windows_symlink_ok,
         # Even if symlinks aren't allowed, faster-whisper can work if the model is already cached.
         # Downloads of *new* models may fail without Developer Mode/Admin on Windows.

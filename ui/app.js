@@ -117,6 +117,26 @@ const syncPreview = () => {
 });
 syncPreview();
 
+// Model/backend compatibility helper: large-v3-turbo is a Transformers-only model in this app.
+(() => {
+  const modelSel = document.getElementById("whisper_model");
+  const backendSel = document.getElementById("transcribe_backend");
+  if (!modelSel || !backendSel) return;
+
+  const wantsHf = (model) => {
+    if (!model) return false;
+    return model.includes("/") || model.includes("turbo");
+  };
+
+  modelSel.addEventListener("change", () => {
+    const model = modelSel.value || "";
+    if (!wantsHf(model)) return;
+    if (backendSel.value !== "openai") return;
+    // Use auto so the app picks the best installed backend (HF if available).
+    backendSel.value = "auto";
+  });
+})();
+
 const syncRuntime = async () => {
   if (!cudaPreview) return;
   try {
@@ -139,9 +159,11 @@ const syncRuntime = async () => {
       const opts = backendSelect.querySelectorAll("md-select-option");
       const openaiOpt = Array.from(opts).find((o) => o.getAttribute("value") === "openai");
       const fasterOpt = Array.from(opts).find((o) => o.getAttribute("value") === "faster");
+      const hfOpt = Array.from(opts).find((o) => o.getAttribute("value") === "hf");
 
       const openaiOk = data.openai_whisper_available ?? data.whisper_available;
       const fasterOk = data.faster_whisper_available;
+      const hfOk = data.transformers_available;
       const fasterUsable = data.faster_whisper_usable ?? fasterOk;
       const symlinkOk = data.windows_symlink_ok;
       const fasterDownloadWarn = data.faster_whisper_download_may_need_symlink ?? false;
@@ -162,8 +184,13 @@ const syncRuntime = async () => {
           fasterOpt.removeAttribute("disabled");
         }
       }
+      if (hfOpt) {
+        hfOpt.textContent = hfOk ? "HF Transformers (GPU if available)" : "HF Transformers (not installed)";
+        if (!hfOk) hfOpt.setAttribute("disabled", "");
+        else hfOpt.removeAttribute("disabled");
+      }
 
-      if (!openaiOk && !fasterOk) {
+      if (!openaiOk && !fasterOk && !hfOk) {
         backendSelect.value = "auto";
       }
     }

@@ -3,6 +3,7 @@
 # Optional (uncomment as needed):
 # faster-whisper
 # openai-whisper
+# transformers
 # pytesseract
 # pillow
 

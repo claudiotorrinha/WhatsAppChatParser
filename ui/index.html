@@ -92,8 +92,9 @@
                   <md-select-option value="small">small</md-select-option>
                   <md-select-option value="medium" selected>medium</md-select-option>
                   <md-select-option value="large-v3">large-v3</md-select-option>
+                  <md-select-option value="large-v3-turbo">large-v3-turbo</md-select-option>
                 </md-filled-select>
-                <p class="helper">Bigger models are slower but more accurate.</p>
+                <p class="helper">Bigger models are slower but more accurate. large-v3-turbo requires the HF backend (or auto).</p>
               </div>
               <div class="field">
                 <md-filled-select label="Transcription language" id="lang" name="lang">
@@ -243,6 +244,7 @@
                 <md-filled-select label="Transcribe backend" id="transcribe_backend" name="transcribe_backend">
                   <md-select-option value="openai" selected>OpenAI Whisper (GPU if available)</md-select-option>
                   <md-select-option value="faster">Faster Whisper (CPU)</md-select-option>
+                  <md-select-option value="hf">HF Transformers (GPU if available)</md-select-option>
                   <md-select-option value="auto">Auto (prefers OpenAI)</md-select-option>
                 </md-filled-select>
                 <p class="helper">Auto picks what is installed.</p>

@@ -111,6 +111,33 @@ if (-not ($installWhisper -match '^[Nn]$')) {
   & "$VenvDir\Scripts\python.exe" -c "import torch; print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
 }
 
+$installHf = Read-Host "Install HF Transformers backend (for whisper-large-v3-turbo)? [Y/n]"
+if (-not ($installHf -match '^[Nn]$')) {
+  # Ensure torch is installed (and CUDA wheels if desired).
+  & "$VenvDir\Scripts\python.exe" -c "import torch; print('torch', torch.__version__)" | Out-Null
+  $torchOk = ($LASTEXITCODE -eq 0)
+
+  if (-not $torchOk) {
+    $hasNvidia = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
+    if ($hasNvidia) {
+      Write-Host "NVIDIA GPU detected (nvidia-smi found)."
+      $useCuda = Read-Host "Install CUDA-enabled PyTorch wheels? (no CUDA toolkit needed) [Y/n]"
+      if (-not ($useCuda -match '^[Nn]$')) {
+        & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+      } else {
+        & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio
+      }
+    } else {
+      & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio
+    }
+  }
+
+  & "$VenvDir\Scripts\python.exe" -m pip install -U transformers
+
+  Write-Host "Verifying transformers + torch..."
+  & "$VenvDir\Scripts\python.exe" -c "import transformers; import torch; print('transformers', transformers.__version__); print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
+}
+
 $installFasterWhisper = Read-Host "Install Faster Whisper (CPU backend)? [Y/n]"
 if (-not ($installFasterWhisper -match '^[Nn]$')) {
   & "$VenvDir\Scripts\python.exe" -m pip install -U faster-whisper

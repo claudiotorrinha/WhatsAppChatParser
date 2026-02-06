@@ -70,6 +70,29 @@ if [[ ! "$yn" =~ ^[Nn]$ ]]; then
   python -c "import torch; print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
 fi
 
+read -r -p "Install HF Transformers backend (for whisper-large-v3-turbo)? [Y/n] " ynhf
+if [[ ! "$ynhf" =~ ^[Nn]$ ]]; then
+  if ! python -c "import torch" >/dev/null 2>&1; then
+    # Install PyTorch first so we can choose CUDA vs CPU.
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      echo "NVIDIA GPU detected (nvidia-smi found)." >&2
+      read -r -p "Install CUDA-enabled PyTorch wheels? (no CUDA toolkit needed) [Y/n] " yn3
+      if [[ ! "$yn3" =~ ^[Nn]$ ]]; then
+        pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+      else
+        pip install -U torch torchvision torchaudio
+      fi
+    else
+      pip install -U torch torchvision torchaudio
+    fi
+  fi
+
+  pip install -U transformers
+
+  echo "Verifying transformers + torch..." >&2
+  python -c "import transformers; import torch; print('transformers', transformers.__version__); print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
+fi
+
 read -r -p "Install Faster Whisper (CPU backend)? [Y/n] " ynf
 if [[ ! "$ynf" =~ ^[Nn]$ ]]; then
   pip install -U faster-whisper

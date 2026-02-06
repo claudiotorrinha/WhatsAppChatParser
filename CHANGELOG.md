@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.1.0
+
+### Highlights
+- Added HF Transformers transcription backend (`--transcribe-backend hf`), including support for `openai/whisper-large-v3-turbo` (UI option: `large-v3-turbo`).
+
 ## v1.0.0
 
 First release of WhatsApp Export Studio.

@@ -70,6 +70,10 @@ python whatsapp_export_to_jsonl.py --tz +00:00
   .venv\Scripts\Activate.ps1
   python -c "import whisper; print('whisper ok')"
   ```
+- If using `large-v3-turbo`, install the HF backend and select `HF Transformers` (or `Auto`) in the UI:
+  ```powershell
+  python -c "import transformers; print('transformers ok')"
+  ```
 - Make sure Disable transcription is unchecked in the UI.
 
 ### Faster Whisper fails downloading models on Windows (WinError 1314)
