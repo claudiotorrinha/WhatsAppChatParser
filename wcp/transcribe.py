@@ -4,29 +4,26 @@ from pathlib import Path
 from typing import Optional
 
 
+SUPPORTED_MODELS = {
+    "medium": "openai/whisper-medium",
+    "large-v3-turbo": "openai/whisper-large-v3-turbo",
+}
+
+
 class Transcriber:
-    """Whisper wrapper.
+    """Whisper transcription wrapper using HF Transformers."""
 
-    We default to OpenAI Whisper (reference) to avoid any perceived quality regressions.
-    Faster-whisper can be enabled explicitly via backend="faster".
-    HuggingFace/Transformers models can be used via backend="hf" (e.g. openai/whisper-large-v3-turbo).
-    """
-
-    def __init__(self, model: str = "small", backend: str = "openai"):
+    def __init__(self, model: str = "medium", device: Optional[str] = None):
+        if model not in SUPPORTED_MODELS:
+            supported = ", ".join(sorted(SUPPORTED_MODELS))
+            raise ValueError(f"Unsupported transcription model '{model}'. Supported models: {supported}.")
+        if device not in (None, "cpu", "cuda"):
+            raise ValueError("device must be None, 'cpu', or 'cuda'.")
         self.model = model
-        self.backend_name = backend
+        self.device_preference = device
         self.backend = None
+        self.init_error: Optional[str] = None
         self._init_backend()
-
-    def _hf_repo_id(self, model: str) -> str:
-        # Allow short names in the UI/CLI while still supporting arbitrary HF repo ids.
-        if "/" in model:
-            return model
-        if model == "large-v3-turbo":
-            return "openai/whisper-large-v3-turbo"
-        if model in ("tiny", "base", "small", "medium", "large", "large-v2", "large-v3"):
-            return f"openai/whisper-{model}"
-        return model
 
     def _read_wav_mono_16k(self, wav_path: Path) -> list[float]:
         # Media conversion uses: -ac 1 -ar 16000, so this should be 16k mono PCM.
@@ -54,121 +51,109 @@ class Transcriber:
         scale = 1.0 / 32768.0
         return [float(x) * scale for x in pcm]
 
+    def _iter_audio_chunks(
+        self, audio: list[float], *, sample_rate: int = 16000, chunk_seconds: int = 30
+    ):
+        """Yield fixed-size audio chunks to avoid Whisper truncation on long files."""
+        chunk_size = sample_rate * chunk_seconds
+        if chunk_size <= 0:
+            yield audio
+            return
+        for i in range(0, len(audio), chunk_size):
+            yield audio[i : i + chunk_size]
+
     def _init_backend(self):
-        # Explicit choice
-        if self.backend_name == "openai":
-            try:
-                import whisper  # type: ignore
-                self.backend = ("openai", whisper.load_model(self.model))
-            except Exception:
-                self.backend = None
-            return
-
-        if self.backend_name == "faster":
-            try:
-                from faster_whisper import WhisperModel  # type: ignore
-                self.backend = ("faster", WhisperModel(self.model, device="cpu", compute_type="int8"))
-            except Exception:
-                self.backend = None
-            return
-
-        if self.backend_name in ("hf", "transformers"):
-            try:
-                import torch  # type: ignore
-                from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor  # type: ignore
-
-                repo_id = self._hf_repo_id(self.model)
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                dtype = torch.float16 if device == "cuda" else torch.float32
-
-                processor = AutoProcessor.from_pretrained(repo_id)
-                model = AutoModelForSpeechSeq2Seq.from_pretrained(repo_id, torch_dtype=dtype)
-                model.to(device)
-                model.eval()
-                self.backend = ("hf", (processor, model, device))
-            except Exception:
-                self.backend = None
-            return
-
-        # auto: try openai first, then hf, then faster
-        try:
-            import whisper  # type: ignore
-            self.backend = ("openai", whisper.load_model(self.model))
-            return
-        except Exception:
-            pass
-
+        attempted_errors: list[str] = []
         try:
             import torch  # type: ignore
             from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor  # type: ignore
 
-            repo_id = self._hf_repo_id(self.model)
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            dtype = torch.float16 if device == "cuda" else torch.float32
+            if self.device_preference == "cuda":
+                if not torch.cuda.is_available():
+                    raise RuntimeError("CUDA requested but not available.")
+                devices = ["cuda"]
+            elif self.device_preference == "cpu":
+                devices = ["cpu"]
+            else:
+                devices = ["cuda", "cpu"] if torch.cuda.is_available() else ["cpu"]
 
-            processor = AutoProcessor.from_pretrained(repo_id)
-            model = AutoModelForSpeechSeq2Seq.from_pretrained(repo_id, torch_dtype=dtype)
-            model.to(device)
-            model.eval()
-            self.backend = ("hf", (processor, model, device))
-            return
-        except Exception:
-            pass
+            for device in devices:
+                try:
+                    dtype = torch.float16 if device == "cuda" else torch.float32
+                    repo_id = SUPPORTED_MODELS[self.model]
+                    processor = AutoProcessor.from_pretrained(repo_id)
+                    # Newer Transformers prefers `dtype`; keep a fallback for older releases.
+                    try:
+                        model = AutoModelForSpeechSeq2Seq.from_pretrained(repo_id, dtype=dtype)
+                    except TypeError:
+                        model = AutoModelForSpeechSeq2Seq.from_pretrained(repo_id, torch_dtype=dtype)
+                    model.to(device)
+                    model.eval()
+                    self.backend = (processor, model, device)
+                    if attempted_errors:
+                        self.init_error = f"Recovered after fallback. Earlier errors: {' | '.join(attempted_errors)}"
+                    else:
+                        self.init_error = None
+                    return
+                except Exception as e:
+                    attempted_errors.append(f"{device}: {e}")
+        except Exception as e:
+            attempted_errors.append(str(e))
 
-        try:
-            from faster_whisper import WhisperModel  # type: ignore
-            self.backend = ("faster", WhisperModel(self.model, device="cpu", compute_type="int8"))
-            return
-        except Exception:
-            self.backend = None
+        if attempted_errors:
+            self.init_error = " ; ".join(attempted_errors)
+        else:
+            self.init_error = "Unknown initialization error."
+        self.backend = None
+
+    def backend_error(self) -> Optional[str]:
+        return self.init_error
+
+    def _unavailable_message(self) -> str:
+        msg = "HF Transformers backend is not installed or failed to initialize."
+        if self.init_error:
+            return f"{msg} Details: {self.init_error}"
+        return msg
 
     def available(self) -> bool:
         return self.backend is not None
 
     def transcribe_wav(self, wav_path: Path, language: Optional[str] = "pt") -> str:
         if not self.backend:
-            raise RuntimeError("No transcription backend installed.")
+            raise RuntimeError(self._unavailable_message())
 
-        kind, model = self.backend
-        if kind == "faster":
-            segments, info = model.transcribe(str(wav_path), language=language)
-            text_parts = [seg.text.strip() for seg in segments if seg.text.strip()]
-            return " ".join(text_parts).strip()
+        processor, asr_model, device = self.backend
+        try:
+            import torch  # type: ignore
 
-        if kind == "hf":
-            processor, asr_model, device = model
-            try:
-                import torch  # type: ignore
+            audio = self._read_wav_mono_16k(wav_path)
+            model_dtype = getattr(asr_model, "dtype", None)
+            if model_dtype is None:
+                try:
+                    model_dtype = next(asr_model.parameters()).dtype
+                except Exception:
+                    model_dtype = None
 
-                audio = self._read_wav_mono_16k(wav_path)
-                inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
-                inputs = {k: v.to(device) for k, v in inputs.items()}
+            gen_kwargs = {}
+            if language and hasattr(processor, "get_decoder_prompt_ids"):
+                try:
+                    gen_kwargs["forced_decoder_ids"] = processor.get_decoder_prompt_ids(language=language, task="transcribe")
+                except Exception:
+                    pass
 
-                # If the model is in fp16 (common on CUDA), the input features must match dtype.
-                model_dtype = getattr(asr_model, "dtype", None)
-                if model_dtype is None:
-                    try:
-                        model_dtype = next(asr_model.parameters()).dtype
-                    except Exception:
-                        model_dtype = None
-                if model_dtype is not None and "input_features" in inputs:
-                    inputs["input_features"] = inputs["input_features"].to(dtype=model_dtype)
-
-                gen_kwargs = {}
-                if language:
-                    # Transformers whisper uses 2-letter codes like "pt", "en", etc.
-                    if hasattr(processor, "get_decoder_prompt_ids"):
-                        try:
-                            gen_kwargs["forced_decoder_ids"] = processor.get_decoder_prompt_ids(language=language, task="transcribe")
-                        except Exception:
-                            pass
-
-                with torch.inference_mode():
+            chunk_texts: list[str] = []
+            with torch.inference_mode():
+                for chunk in self._iter_audio_chunks(audio, sample_rate=16000, chunk_seconds=30):
+                    if not chunk:
+                        continue
+                    inputs = processor(chunk, sampling_rate=16000, return_tensors="pt")
+                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                    if model_dtype is not None and "input_features" in inputs:
+                        inputs["input_features"] = inputs["input_features"].to(dtype=model_dtype)
                     predicted_ids = asr_model.generate(**inputs, **gen_kwargs)
-                text = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
-                return (text or "").strip()
-            except Exception as e:
-                raise RuntimeError(f"HF transcription failed: {e}") from e
-
-        result = model.transcribe(str(wav_path), language=language)
-        return (result.get("text") or "").strip()
+                    chunk_text = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].strip()
+                    if chunk_text:
+                        chunk_texts.append(chunk_text)
+            return " ".join(chunk_texts).strip()
+        except Exception as e:
+            raise RuntimeError(f"HF transcription failed: {e}") from e

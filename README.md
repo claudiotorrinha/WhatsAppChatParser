@@ -24,28 +24,28 @@ python -m wcp.ui_app
 ```
 Open: http://127.0.0.1:8000
 
-> The installer can optionally install Whisper (for transcription) and OCR dependencies.
+> The installers are non-interactive and install all runtime dependencies.
 
 ## What you need
 - Python 3.10+
 - ffmpeg (for audio conversion/transcription)
 - Tesseract OCR (for image OCR)
 
-The installers can guide you through installing these.
+The installers will attempt to install missing system dependencies and fail fast with exact commands when they cannot.
 
 ## Using the UI
 1. Upload the WhatsApp export .zip.
-2. Keep defaults unless you know you need changes.
-3. Click Run pipeline.
-4. Outputs appear in the out/ folder by default.
+2. Optionally choose model (`medium` or `large-v3-turbo`).
+3. Optionally use **Model Quick Test**: upload one audio sample, run the selected model, and compare transcript + elapsed time before starting a full run.
+4. Optionally disable transcription and/or OCR, or force CPU for low-VRAM GPUs.
+5. Click Run pipeline.
+6. Outputs appear in the out/ folder by default.
+7. Parser format, timezone, and language are auto-selected.
 
-### Basics vs Advanced
-- Basics shows the settings most people need (output folder, Whisper model, language, OCR).
-- Advanced contains parsing overrides, performance tuning, benchmarking, and power-user controls.
-
-### Benchmark
-Use the Benchmark section (Advanced) to compare speed vs quality on a small sample of your export.
-It also shows a rough estimate of total processing time (sample-based).
+### Defaults
+- UI is intentionally minimal for plug-and-play execution.
+- Supported transcription models are `medium` and `large-v3-turbo` on the HF Transformers backend.
+- Parser format, timezone, and language are automatic.
 
 ## Outputs
 - out/conversation.jsonl - canonical dataset (one JSON object per message)
@@ -57,28 +57,26 @@ It also shows a rough estimate of total processing time (sample-based).
 - out/manifest.jsonl - append-only processing log
 - out/report.md - summary report
 
-## Optional CLI (advanced)
-If you prefer CLI:
+## Optional CLI
+If you prefer CLI, pass a folder or zip and optionally set only core toggles:
 ```bash
-python whatsapp_export_to_jsonl.py --tz +00:00
+python whatsapp_export_to_jsonl.py "<export-folder-or-zip>" \
+  --out out \
+  --whisper-model medium
 ```
+
+Optional toggles: `--no-transcribe`, `--no-ocr`, `--quiet`, `--force-cpu`.
+
+Legacy advanced flags are currently accepted but ignored with a warning for compatibility.
 
 ## Troubleshooting
 ### Transcription not working
-- Ensure Whisper is installed in the venv:
+- Ensure core Python dependencies are installed in the venv:
   ```powershell
   .venv\Scripts\Activate.ps1
-  python -c "import whisper; print('whisper ok')"
-  ```
-- If using `large-v3-turbo`, install the HF backend and select `HF Transformers` (or `Auto`) in the UI:
-  ```powershell
-  python -c "import transformers; print('transformers ok')"
+  python -c "import torch, transformers; print('ok')"
   ```
 - Make sure Disable transcription is unchecked in the UI.
-
-### Faster Whisper fails downloading models on Windows (WinError 1314)
-This can happen when Windows blocks symlink creation in the Hugging Face cache.
-Fix it by either enabling Windows Developer Mode (recommended) or running PowerShell as Administrator.
 
 ### OCR not working
 - Ensure tesseract is installed and on PATH.
@@ -87,8 +85,8 @@ Fix it by either enabling Windows Developer Mode (recommended) or running PowerS
   tesseract --version
   ```
 
-### Dates look wrong
-Use Parse format and Date order overrides in the UI.
+### Timezone
+Timezone is now automatic (`auto`) using your local environment offset.
 
-### Rerun from scratch
-Enable Disable resume in the UI to force reprocessing.
+### Re-run behavior
+The pipeline resumes by default and skips already processed artifacts where possible.

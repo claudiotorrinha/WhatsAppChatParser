@@ -4,6 +4,7 @@
 
 ### Highlights
 - Added HF Transformers transcription backend (`--transcribe-backend hf`), including support for `openai/whisper-large-v3-turbo` (UI option: `large-v3-turbo`).
+- Added **Model Quick Test** in the UI to transcribe a single audio sample with the selected model and report elapsed time.
 
 ## v1.0.0
 

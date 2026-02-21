@@ -1,13 +1,6 @@
-# Core
-
-# Optional (uncomment as needed):
-# faster-whisper
-# openai-whisper
-# transformers
-# pytesseract
-# pillow
-
-# UI
 fastapi
 uvicorn
 python-multipart
+transformers
+pytesseract
+pillow

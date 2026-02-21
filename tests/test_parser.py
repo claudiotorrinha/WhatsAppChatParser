@@ -30,6 +30,10 @@ class TestParserDetect(unittest.TestCase):
         self.assertEqual(len(msgs), 2)
         self.assertTrue(msgs[0].ts.startswith("2025-09-20T09:41:00+00:00"))
 
+    def test_resolve_tz_offset_auto_returns_hhmm(self):
+        tz = parser.resolve_tz_offset_str("auto")
+        self.assertRegex(tz, r"^[+-]\d{2}:\d{2}$")
+
     def test_detect_android_mdy(self):
         chat = "9/20/2025, 9:41 AM - John: hi\n"
         path = self._write_chat(chat)

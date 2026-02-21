@@ -21,20 +21,20 @@
             <p class="eyebrow">WhatsApp Export Studio</p>
           </div>
           <h1>Turn chat exports into searchable data.</h1>
-          <p class="lead">Upload a zip, pick the options you care about, and run everything locally. No terminals, no guessing.</p>
+          <p class="lead">Choose zip, click run. Parser, timezone, and language are automatic.</p>
         </div>
         <div class="hero-meta">
           <div class="meta-item">
             <span class="meta-label">Mode</span>
-            <span class="meta-value">Local pipeline</span>
+            <span class="meta-value">Plug and play</span>
           </div>
           <div class="meta-item">
             <span class="meta-label">Outputs</span>
             <span class="meta-value">JSONL + Markdown</span>
           </div>
           <div class="meta-item">
-            <span class="meta-label">Features</span>
-            <span class="meta-value">Audio + OCR</span>
+            <span class="meta-label">Models</span>
+            <span class="meta-value">medium / large-v3-turbo</span>
           </div>
         </div>
       </header>
@@ -42,411 +42,78 @@
       <section class="workspace">
         <div class="card form-card">
           <form id="run-form" class="form">
-          <div class="section basics">
-            <h2>Basics</h2>
-            <div class="grid two">
-              <div class="field">
-                <div class="file-picker">
-                  <md-outlined-text-field label="Zip file" id="zip-display" readonly></md-outlined-text-field>
-                  <md-filled-tonal-button id="zip-button" type="button">Choose zip</md-filled-tonal-button>
-                  <input type="file" id="zip" name="zip" accept=".zip" required hidden>
+            <div class="section basics">
+              <h2>Run</h2>
+              <div class="grid two run-inputs">
+                <div class="field">
+                  <div class="file-picker">
+                    <md-outlined-text-field label="Zip file" id="zip-display" readonly></md-outlined-text-field>
+                    <md-filled-tonal-button id="zip-button" type="button">Choose zip</md-filled-tonal-button>
+                    <input type="file" id="zip" name="zip" accept=".zip" required hidden>
+                  </div>
                 </div>
-                <p class="helper">Pick the WhatsApp export zip you downloaded from the app.</p>
+                <div class="field">
+                  <md-outlined-text-field label="Output folder" id="out" name="out" value="out"></md-outlined-text-field>
+                </div>
               </div>
-              <div class="field">
-                <md-outlined-text-field label="Output folder" id="out" name="out" value="out"></md-outlined-text-field>
-                <p class="helper">Where results are written on disk (defaults to ./out).</p>
+
+              <div class="grid two run-options">
+                <div class="field">
+                  <md-filled-select label="Transcription model" id="whisper_model" name="whisper_model">
+                    <md-select-option value="medium" selected>medium</md-select-option>
+                    <md-select-option value="large-v3-turbo">large-v3-turbo</md-select-option>
+                  </md-filled-select>
+                </div>
+                <div class="option">
+                  <div class="checkbox-row">
+                    <md-checkbox id="no_transcribe" name="no_transcribe"></md-checkbox>
+                    <label for="no_transcribe">Disable transcription</label>
+                  </div>
+                  <div class="checkbox-row">
+                    <md-checkbox id="no_ocr" name="no_ocr"></md-checkbox>
+                    <label for="no_ocr">Disable OCR</label>
+                  </div>
+                  <div class="checkbox-row">
+                    <md-checkbox id="force_cpu" name="force_cpu"></md-checkbox>
+                    <label for="force_cpu">Force CPU (for low-VRAM GPUs)</label>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div class="grid two">
-              <div class="field">
-                <md-filled-select label="Time zone offset" id="tz" name="tz">
-                  <md-select-option value="+00:00" selected>UTC +00:00</md-select-option>
-                  <md-select-option value="+01:00">UTC +01:00</md-select-option>
-                  <md-select-option value="+02:00">UTC +02:00</md-select-option>
-                  <md-select-option value="+03:00">UTC +03:00</md-select-option>
-                  <md-select-option value="-01:00">UTC -01:00</md-select-option>
-                  <md-select-option value="-05:00">UTC -05:00</md-select-option>
-                  <md-select-option value="-08:00">UTC -08:00</md-select-option>
-                </md-filled-select>
-                <p class="helper">Sets the time zone shown in the final transcript.</p>
+            <div class="section quick-test">
+              <h2>Model Quick Test</h2>
+              <div class="grid two run-inputs">
+                <div class="field">
+                  <div class="file-picker">
+                    <md-outlined-text-field label="Audio sample" id="sample-audio-display" readonly></md-outlined-text-field>
+                    <md-filled-tonal-button id="sample-audio-button" type="button">Choose audio</md-filled-tonal-button>
+                    <input type="file" id="sample_audio" name="sample_audio" accept="audio/*,.mp3,.wav,.m4a,.ogg,.opus,.aac,.flac,.webm" hidden>
+                  </div>
+                </div>
+                <div class="option">
+                  <button type="button" id="test-model-button" class="btn btn-ghost" disabled>Test selected model</button>
+                  <div class="test-stats">
+                    <div class="test-stat">
+                      <span class="stat-label">Model</span>
+                      <span class="stat-value" id="test-model-used">-</span>
+                    </div>
+                    <div class="test-stat">
+                      <span class="stat-label">Elapsed</span>
+                      <span class="stat-value" id="test-model-time">-</span>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div class="field">
-                <md-filled-select label="OCR language" id="ocr_lang" name="ocr_lang">
-                  <md-select-option value="auto" selected>Auto (por+eng)</md-select-option>
-                  <md-select-option value="por">Portuguese</md-select-option>
-                  <md-select-option value="eng">English</md-select-option>
-                  <md-select-option value="spa">Spanish</md-select-option>
-                  <md-select-option value="fra">French</md-select-option>
-                </md-filled-select>
-                <p class="helper">Auto uses Portuguese + English for best coverage.</p>
-              </div>
+              <pre id="test-model-output">No test run yet.</pre>
             </div>
 
-            <div class="grid two">
-              <div class="field">
-                <md-filled-select label="Whisper model" id="whisper_model" name="whisper_model">
-                  <md-select-option value="tiny">tiny</md-select-option>
-                  <md-select-option value="base">base</md-select-option>
-                  <md-select-option value="small">small</md-select-option>
-                  <md-select-option value="medium" selected>medium</md-select-option>
-                  <md-select-option value="large-v3">large-v3</md-select-option>
-                  <md-select-option value="large-v3-turbo">large-v3-turbo</md-select-option>
-                </md-filled-select>
-                <p class="helper">Bigger models are slower but more accurate. large-v3-turbo requires the HF backend (or auto).</p>
-              </div>
-              <div class="field">
-                <md-filled-select label="Transcription language" id="lang" name="lang">
-                  <md-select-option value="auto" selected>Auto detect</md-select-option>
-                  <md-select-option value="pt">Portuguese</md-select-option>
-                  <md-select-option value="en">English</md-select-option>
-                  <md-select-option value="es">Spanish</md-select-option>
-                  <md-select-option value="fr">French</md-select-option>
-                </md-filled-select>
-                <p class="helper">Use auto unless the language is consistently wrong.</p>
+            <div class="section actions">
+              <div class="left">
+                <button type="submit" id="run-button" class="btn btn-primary">Run pipeline</button>
+                <button type="button" id="reset" class="btn btn-ghost">Reset</button>
               </div>
             </div>
-
-            <div class="grid two">
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="no_transcribe" name="no_transcribe"></md-checkbox>
-                  <label for="no_transcribe">Disable transcription</label>
-                </div>
-                <p class="helper">Skip turning voice notes into text.</p>
-              </div>
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="no_ocr" name="no_ocr"></md-checkbox>
-                  <label for="no_ocr">Disable OCR</label>
-                </div>
-                <p class="helper">Skip reading text from images.</p>
-              </div>
-            </div>
-          </div>
-
-          <details class="advanced">
-            <summary>
-              <span class="summary-title">Advanced</span>
-              <span class="summary-sub">Parsing, output formats, performance tuning, benchmarking.</span>
-            </summary>
-
-          <div class="section">
-            <h2>Parsing</h2>
-            <div class="grid three">
-              <div class="field">
-                <md-filled-select label="Parse format" id="format" name="format">
-                  <md-select-option value="auto" selected>Auto detect</md-select-option>
-                  <md-select-option value="pt">Portuguese Android</md-select-option>
-                  <md-select-option value="android">Android (generic)</md-select-option>
-                  <md-select-option value="ios">iOS bracket</md-select-option>
-                </md-filled-select>
-                <p class="helper">Use auto unless the parser guesses wrong.</p>
-              </div>
-              <div class="field">
-                <md-filled-select label="Date order" id="date_order" name="date_order">
-                  <md-select-option value="auto" selected>Auto detect</md-select-option>
-                  <md-select-option value="dmy">Day / Month / Year</md-select-option>
-                  <md-select-option value="mdy">Month / Day / Year</md-select-option>
-                </md-filled-select>
-                <p class="helper">Only needed if dates appear swapped.</p>
-              </div>
-              <div class="field option">
-                <div class="checkbox-row">
-                  <md-checkbox id="quiet" name="quiet"></md-checkbox>
-                  <label for="quiet">Quiet mode</label>
-                </div>
-                <p class="helper">Hide progress messages while running.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="section">
-            <h2>Output</h2>
-            <div class="grid three">
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="no_manifest" name="no_manifest"></md-checkbox>
-                  <label for="no_manifest">Disable manifest</label>
-                </div>
-                <p class="helper">Stops writing the audit log of what was processed.</p>
-              </div>
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="no_report" name="no_report"></md-checkbox>
-                  <label for="no_report">Disable report</label>
-                </div>
-                <p class="helper">Skip the summary report file.</p>
-              </div>
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="no_by_month" name="no_by_month"></md-checkbox>
-                  <label for="no_by_month">Disable by-month</label>
-                </div>
-                <p class="helper">Skip monthly split outputs.</p>
-              </div>
-            </div>
-            <div class="grid two">
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="no_md" name="no_md"></md-checkbox>
-                  <label for="no_md">Disable transcript markdown</label>
-                </div>
-                <p class="helper">Skip the human-readable transcript.</p>
-              </div>
-              <div class="field-toggle">
-                <div class="checkbox-row">
-                  <md-checkbox id="md_max_enabled"></md-checkbox>
-                  <label for="md_max_enabled">Set markdown max chars</label>
-                </div>
-                <md-outlined-text-field label="MD max chars" type="number" id="md_max_chars" value="4000" disabled></md-outlined-text-field>
-                <p class="helper">Limit how much transcript/OCR text is shown per message.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="section">
-            <h2>Transcription</h2>
-            <div class="grid three">
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="only_transcribe" name="only_transcribe"></md-checkbox>
-                  <label for="only_transcribe">Only transcribe</label>
-                </div>
-                <p class="helper">Only transcribe missing voice notes. Outputs are still generated.</p>
-              </div>
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="no_resume" name="no_resume"></md-checkbox>
-                  <label for="no_resume">Disable resume</label>
-                </div>
-                <p class="helper">Re-process everything even if outputs exist.</p>
-              </div>
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="force_cpu" name="force_cpu"></md-checkbox>
-                  <label for="force_cpu">Force CPU (disable CUDA)</label>
-                </div>
-                <p class="helper">Useful for low‑VRAM GPUs or stability.</p>
-              </div>
-            </div>
-            <div class="grid two">
-              <div class="field">
-                <md-filled-select label="Convert audio" id="convert_audio" name="convert_audio">
-                  <md-select-option value="mp3" selected>MP3</md-select-option>
-                  <md-select-option value="wav">WAV</md-select-option>
-                  <md-select-option value="none">None</md-select-option>
-                </md-filled-select>
-                <p class="helper">Format for saved voice notes.</p>
-              </div>
-              <div class="field">
-                <md-filled-select label="Transcribe backend" id="transcribe_backend" name="transcribe_backend">
-                  <md-select-option value="openai" selected>OpenAI Whisper (GPU if available)</md-select-option>
-                  <md-select-option value="faster">Faster Whisper (CPU)</md-select-option>
-                  <md-select-option value="hf">HF Transformers (GPU if available)</md-select-option>
-                  <md-select-option value="auto">Auto (prefers OpenAI)</md-select-option>
-                </md-filled-select>
-                <p class="helper">Auto picks what is installed.</p>
-              </div>
-            </div>
-            <div class="grid two">
-              <div class="field-toggle">
-                <div class="checkbox-row">
-                  <md-checkbox id="progress_enabled" checked></md-checkbox>
-                  <label for="progress_enabled">Set progress interval</label>
-                </div>
-                <md-outlined-text-field label="Progress every N" type="number" id="progress_every" value="50" disabled></md-outlined-text-field>
-                <p class="helper">Print a progress line every N messages.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="section">
-            <h2>OCR</h2>
-            <div class="grid three">
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="only_ocr" name="only_ocr"></md-checkbox>
-                  <label for="only_ocr">Only OCR</label>
-                </div>
-                <p class="helper">Only OCR missing images. Outputs are still generated.</p>
-              </div>
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="hash_media" name="hash_media"></md-checkbox>
-                  <label for="hash_media">Hash media</label>
-                </div>
-                <p class="helper">Adds file fingerprints for verification (slower).</p>
-              </div>
-            </div>
-            <div class="grid two">
-              <div class="field">
-                <md-filled-select label="OCR mode" id="ocr_mode" name="ocr_mode">
-                  <md-select-option value="all" selected>All images</md-select-option>
-                  <md-select-option value="likely-text">Likely text</md-select-option>
-                </md-filled-select>
-                <p class="helper">“Likely text” is faster for screenshots.</p>
-              </div>
-              <div class="field-toggle">
-                <div class="checkbox-row">
-                  <md-checkbox id="ocr_max_enabled"></md-checkbox>
-                  <label for="ocr_max_enabled">Set OCR max</label>
-                </div>
-                <md-outlined-text-field label="OCR max per run" type="number" id="ocr_max" value="0" disabled></md-outlined-text-field>
-                <p class="helper">Limit how many new images are processed.</p>
-              </div>
-            </div>
-            <div class="grid three">
-              <div class="field-toggle">
-                <div class="checkbox-row">
-                  <md-checkbox id="ocr_edge_enabled"></md-checkbox>
-                  <label for="ocr_edge_enabled">Set edge threshold</label>
-                </div>
-                <md-outlined-text-field label="Edge threshold" type="number" id="ocr_edge_threshold" value="18.0" disabled></md-outlined-text-field>
-                <p class="helper">Higher values filter more images out.</p>
-              </div>
-              <div class="field-toggle">
-                <div class="checkbox-row">
-                  <md-checkbox id="ocr_downscale_enabled"></md-checkbox>
-                  <label for="ocr_downscale_enabled">Set downscale</label>
-                </div>
-                <md-outlined-text-field label="Downscale max" type="number" id="ocr_downscale" value="512" disabled></md-outlined-text-field>
-                <p class="helper">Smaller values are faster, but less accurate.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="section">
-            <h2>Performance</h2>
-            <div class="grid three">
-              <div class="field-toggle">
-                <div class="checkbox-row">
-                  <md-checkbox id="audio_workers_enabled"></md-checkbox>
-                  <label for="audio_workers_enabled">Set audio workers</label>
-                </div>
-                <md-outlined-text-field label="Audio workers" type="number" id="audio_workers" value="2" disabled></md-outlined-text-field>
-                <p class="helper">More workers = faster, but higher CPU load.</p>
-              </div>
-              <div class="field-toggle">
-                <div class="checkbox-row">
-                  <md-checkbox id="ocr_workers_enabled"></md-checkbox>
-                  <label for="ocr_workers_enabled">Set OCR workers</label>
-                </div>
-                <md-outlined-text-field label="OCR workers" type="number" id="ocr_workers" value="2" disabled></md-outlined-text-field>
-                <p class="helper">More workers = faster OCR, higher CPU usage.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="section benchmark">
-            <div class="section-header">
-              <h2>Benchmark</h2>
-              <p class="helper">Quickly test speed vs quality on a small sample.</p>
-            </div>
-            <div class="grid three">
-              <div class="field">
-                <md-filled-select label="Benchmark backend" id="bench_backend" name="bench_backend">
-                  <md-select-option value="auto" selected>Auto (all installed)</md-select-option>
-                  <md-select-option value="openai">OpenAI Whisper</md-select-option>
-                  <md-select-option value="faster">Faster Whisper</md-select-option>
-                </md-filled-select>
-                <p class="helper">Runs only the backends you’ve installed.</p>
-              </div>
-              <div class="field">
-                <md-filled-select label="Benchmark language" id="bench_lang" name="bench_lang">
-                  <md-select-option value="pt" selected>Portuguese</md-select-option>
-                  <md-select-option value="en">English</md-select-option>
-                  <md-select-option value="es">Spanish</md-select-option>
-                  <md-select-option value="fr">French</md-select-option>
-                </md-filled-select>
-                <p class="helper">Use the same language as your chat audio.</p>
-              </div>
-              <div class="option">
-                <p class="helper">Benchmark tests CPU and GPU (when available) automatically.</p>
-              </div>
-            </div>
-            <div class="grid three">
-              <div class="field">
-                <md-outlined-text-field label="Audio samples" type="number" id="bench_audio_samples" value="8"></md-outlined-text-field>
-                <p class="helper">Number of voice notes to test.</p>
-              </div>
-              <div class="field">
-                <md-outlined-text-field label="Image samples" type="number" id="bench_image_samples" value="0"></md-outlined-text-field>
-                <p class="helper">Set >0 to benchmark OCR speed.</p>
-              </div>
-              <div class="option">
-                <div class="checkbox-row">
-                  <md-checkbox id="bench_include_ocr" name="bench_include_ocr"></md-checkbox>
-                  <label for="bench_include_ocr">Include OCR</label>
-                </div>
-                <p class="helper">Adds OCR to the benchmark run.</p>
-              </div>
-            </div>
-            <div class="grid two">
-              <div class="field bench-models">
-                <p class="label">Models to test</p>
-                <div class="bench-model">
-                  <md-checkbox data-model="base" checked></md-checkbox>
-                  <span>base</span>
-                </div>
-                <div class="bench-model">
-                  <md-checkbox data-model="small" checked></md-checkbox>
-                  <span>small</span>
-                </div>
-                <div class="bench-model">
-                  <md-checkbox data-model="medium" checked></md-checkbox>
-                  <span>medium</span>
-                </div>
-                <div class="bench-model">
-                  <md-checkbox data-model="large-v3"></md-checkbox>
-                  <span>large-v3</span>
-                </div>
-                <p class="helper">Keep it small for fast feedback.</p>
-              </div>
-              <div class="bench-actions">
-                <div class="bench-status">
-                  <span>Benchmark status</span>
-                  <span id="bench-status" class="status">Idle</span>
-                </div>
-                <div class="bench-buttons">
-                  <md-filled-button type="button" id="bench-run">Run benchmark</md-filled-button>
-                  <md-outlined-button type="button" id="bench-stop" disabled>Stop benchmark</md-outlined-button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="section">
-            <h2>Senders</h2>
-            <div class="grid two">
-              <div class="field-toggle">
-                <div class="checkbox-row">
-                  <md-checkbox id="me_enabled"></md-checkbox>
-                  <label for="me_enabled">Map ME names</label>
-                </div>
-                <md-outlined-text-field label="ME names (comma separated)" id="me" disabled></md-outlined-text-field>
-                <p class="helper">Any sender names in this list become ME.</p>
-              </div>
-              <div class="field-toggle">
-                <div class="checkbox-row">
-                  <md-checkbox id="them_enabled"></md-checkbox>
-                  <label for="them_enabled">Map OTHER names</label>
-                </div>
-                <md-outlined-text-field label="OTHER names (comma separated)" id="them" disabled></md-outlined-text-field>
-                <p class="helper">Any sender names in this list become THEM.</p>
-              </div>
-            </div>
-          </div>
-
-          </details>
-
-          <div class="section actions">
-            <div class="left">
-              <md-filled-button type="submit">Run pipeline</md-filled-button>
-              <md-outlined-button type="button" id="reset">Reset</md-outlined-button>
-            </div>
-          </div>
           </form>
         </div>
 
@@ -476,10 +143,6 @@
                 <span class="stat-value" id="out-preview">out</span>
               </div>
               <div class="stat">
-                <span class="stat-label">Format</span>
-                <span class="stat-value" id="format-preview">Auto</span>
-              </div>
-              <div class="stat">
                 <span class="stat-label">OCR</span>
                 <span class="stat-value" id="ocr-preview">Enabled</span>
               </div>
@@ -497,26 +160,17 @@
               </div>
             </div>
           </div>
-
-          <div class="card log-card">
-            <div class="log-header">
-              <h3>Run log</h3>
-              <span class="log-meta">Latest output</span>
-            </div>
-            <pre id="log-output">Ready.</pre>
-          </div>
-
-          <div class="card bench-card">
-            <div class="log-header">
-              <h3>Benchmark</h3>
-              <span class="log-meta" id="bench-summary">Waiting for a run.</span>
-            </div>
-            <div id="bench-results" class="bench-results">
-              <p class="helper">Run a benchmark to see speed vs quality tradeoffs. Estimates are approximate.</p>
-            </div>
-            <pre id="bench-log">No benchmark yet.</pre>
-          </div>
         </aside>
+      </section>
+
+      <section class="log-section">
+        <div class="card log-card">
+          <div class="log-header">
+            <h3>Run log</h3>
+            <span class="log-meta">Latest output</span>
+          </div>
+          <pre id="log-output">Ready.</pre>
+        </div>
       </section>
     </main>
 

@@ -4,47 +4,28 @@ Param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "WhatsApp export pipeline installer (Windows)"
-
-# Python
-$py = Get-Command python -ErrorAction SilentlyContinue
-if (-not $py) {
-  throw "Python not found. Install Python 3.10+ and ensure it's on PATH."
-}
+Write-Host "WhatsApp export pipeline installer (Windows, non-interactive)"
 
 function Test-Command($name) {
   return [bool](Get-Command $name -ErrorAction SilentlyContinue)
-}
-
-function Ensure-Winget {
-  if (-not (Test-Command "winget")) {
-    Write-Warning "winget not found. Can't auto-install system dependencies."
-    Write-Host "Install from Microsoft Store: 'App Installer' (winget) or install deps manually."
-    return $false
-  }
-  return $true
-}
-
-function Add-ToUserPath($dir) {
-  $dir = $dir.TrimEnd('\\')
-  $current = [Environment]::GetEnvironmentVariable("Path", "User")
-  if ($current -and ($current.Split(';') -contains $dir)) {
-    return
-  }
-  $newPath = if ($current) { "$current;$dir" } else { $dir }
-  [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-  $env:Path = "$env:Path;$dir"
 }
 
 function Refresh-Path {
   $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
 }
 
+function Add-ToUserPath($dir) {
+  $dir = $dir.TrimEnd('\')
+  $current = [Environment]::GetEnvironmentVariable("Path", "User")
+  if ($current -and ($current.Split(';') -contains $dir)) { return }
+  $newPath = if ($current) { "$current;$dir" } else { $dir }
+  [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+  Refresh-Path
+}
+
 function Try-FixPathForExe($exeName, $candidateDirs) {
   foreach ($d in $candidateDirs) {
     if (Test-Path (Join-Path $d $exeName)) {
-      Write-Host "Found $exeName in: $d"
-      Write-Host "Adding to USER PATH..."
       Add-ToUserPath $d
       return $true
     }
@@ -52,33 +33,39 @@ function Try-FixPathForExe($exeName, $candidateDirs) {
   return $false
 }
 
-# ffmpeg (required for audio conversion/transcription)
+if (-not (Test-Command "python")) {
+  throw "Python not found. Install Python 3.10+ and ensure it's on PATH."
+}
+
+if (-not (Test-Command "winget")) {
+  throw "winget not found. Install App Installer from Microsoft Store and retry."
+}
+
 if (-not (Test-Command "ffmpeg")) {
-  Write-Warning "ffmpeg not found in PATH. Audio conversion/transcription will not work without it."
-  if (Ensure-Winget) {
-    $ans = Read-Host "Install ffmpeg via winget now? [y/N]"
-    if ($ans -match '^[Yy]$') {
-      winget install --id Gyan.FFmpeg -e
-      Refresh-Path
-    }
-  }
-
-  # Try common locations if install didn't update PATH
+  Write-Host "ffmpeg not found. Installing with winget..."
+  winget install --id Gyan.FFmpeg -e
+  Refresh-Path
   [void](Try-FixPathForExe "ffmpeg.exe" @(
-    "C:\\Program Files\\FFmpeg\\bin",
-    "C:\\Program Files\\ffmpeg\\bin",
-    "C:\\ffmpeg\\bin"
+    "C:\Program Files\FFmpeg\bin",
+    "C:\Program Files\ffmpeg\bin",
+    "C:\ffmpeg\bin"
   ))
+}
+if (-not (Test-Command "ffmpeg")) {
+  throw "ffmpeg is still not available. Run: winget install --id Gyan.FFmpeg -e"
+}
 
-  if (-not (Test-Command "ffmpeg")) {
-    Write-Warning "ffmpeg still not found in PATH. Do one of:"
-    Write-Host "  1) Install via winget: winget install --id Gyan.FFmpeg -e"
-    Write-Host "  2) Add its bin folder to PATH (common: C:\\Program Files\\FFmpeg\\bin)"
-    Write-Host "Then open a NEW terminal and run: ffmpeg -version"
-  } else {
-    Write-Host "ffmpeg OK: " -NoNewline
-    & ffmpeg -version | Select-Object -First 1
-  }
+if (-not (Test-Command "tesseract")) {
+  Write-Host "tesseract not found. Installing with winget..."
+  winget install --id UB-Mannheim.TesseractOCR -e
+  Refresh-Path
+  [void](Try-FixPathForExe "tesseract.exe" @(
+    "C:\Program Files\Tesseract-OCR",
+    "C:\Program Files (x86)\Tesseract-OCR"
+  ))
+}
+if (-not (Test-Command "tesseract")) {
+  throw "tesseract is still not available. Run: winget install --id UB-Mannheim.TesseractOCR -e"
 }
 
 if (-not (Test-Path $VenvDir)) {
@@ -88,104 +75,22 @@ if (-not (Test-Path $VenvDir)) {
 & "$VenvDir\Scripts\python.exe" -m pip install -U pip wheel
 & "$VenvDir\Scripts\python.exe" -m pip install -r requirements.txt
 
-$installWhisper = Read-Host "Install local Whisper transcription (openai-whisper)? [Y/n]"
-if (-not ($installWhisper -match '^[Nn]$')) {
-  # Install PyTorch first so we can choose CUDA vs CPU.
-  $hasNvidia = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
-
-  if ($hasNvidia) {
-    Write-Host "NVIDIA GPU detected (nvidia-smi found)."
-    $useCuda = Read-Host "Install CUDA-enabled PyTorch wheels? (no CUDA toolkit needed) [Y/n]"
-    if (-not ($useCuda -match '^[Nn]$')) {
-      & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-    } else {
-      & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio
-    }
-  } else {
-    & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio
-  }
-
-  & "$VenvDir\Scripts\python.exe" -m pip install -U openai-whisper
-
-  Write-Host "Verifying Whisper + torch..."
-  & "$VenvDir\Scripts\python.exe" -c "import torch; print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
+$hasNvidia = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
+if ($hasNvidia) {
+  & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+} else {
+  & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio
 }
 
-$installHf = Read-Host "Install HF Transformers backend (for whisper-large-v3-turbo)? [Y/n]"
-if (-not ($installHf -match '^[Nn]$')) {
-  # Ensure torch is installed (and CUDA wheels if desired).
-  & "$VenvDir\Scripts\python.exe" -c "import torch; print('torch', torch.__version__)" | Out-Null
-  $torchOk = ($LASTEXITCODE -eq 0)
+& "$VenvDir\Scripts\python.exe" -m pip install -U transformers pytesseract pillow
 
-  if (-not $torchOk) {
-    $hasNvidia = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
-    if ($hasNvidia) {
-      Write-Host "NVIDIA GPU detected (nvidia-smi found)."
-      $useCuda = Read-Host "Install CUDA-enabled PyTorch wheels? (no CUDA toolkit needed) [Y/n]"
-      if (-not ($useCuda -match '^[Nn]$')) {
-        & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-      } else {
-        & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio
-      }
-    } else {
-      & "$VenvDir\Scripts\python.exe" -m pip install -U torch torchvision torchaudio
-    }
-  }
-
-  & "$VenvDir\Scripts\python.exe" -m pip install -U transformers
-
-  Write-Host "Verifying transformers + torch..."
-  & "$VenvDir\Scripts\python.exe" -c "import transformers; import torch; print('transformers', transformers.__version__); print('torch', torch.__version__); print('cuda_available', torch.cuda.is_available())"
-}
-
-$installFasterWhisper = Read-Host "Install Faster Whisper (CPU backend)? [Y/n]"
-if (-not ($installFasterWhisper -match '^[Nn]$')) {
-  & "$VenvDir\Scripts\python.exe" -m pip install -U faster-whisper
-}
-
-$installOcr = Read-Host "Install image OCR support (pytesseract + pillow)? [Y/n]"
-if (-not ($installOcr -match '^[Nn]$')) {
-  & "$VenvDir\Scripts\python.exe" -m pip install -U pytesseract pillow
-
-  function Try-FixTesseractPath {
-    return (Try-FixPathForExe "tesseract.exe" @(
-      "C:\\Program Files\\Tesseract-OCR",
-      "C:\\Program Files (x86)\\Tesseract-OCR"
-    ))
-  }
-
-  # Tesseract (required for OCR)
-  if (-not (Test-Command "tesseract")) {
-    Write-Warning "tesseract not found in PATH. OCR will not work without it."
-    if (Ensure-Winget) {
-      $ans = Read-Host "Install Tesseract OCR via winget now? [y/N]"
-      if ($ans -match '^[Yy]$') {
-        winget install --id UB-Mannheim.TesseractOCR -e
-        # winget/installer may not update this PowerShell session's PATH
-        Refresh-Path
-      }
-    }
-
-    # Try to add common install dir to PATH (covers many installers that don't update PATH)
-    [void](Try-FixTesseractPath)
-  }
-
-  if (-not (Test-Command "tesseract")) {
-    Write-Warning "tesseract still not found in PATH. Do one of:"
-    Write-Host "  1) Install via winget: winget install --id UB-Mannheim.TesseractOCR -e"
-    Write-Host "  2) Add its install folder to PATH (common: C:\\Program Files\\Tesseract-OCR)"
-    Write-Host "Then open a NEW terminal and run: tesseract --version"
-  } else {
-    Write-Host "tesseract OK: " -NoNewline
-    & tesseract --version | Select-Object -First 1
-  }
-}
+Write-Host "Verifying dependencies..."
+& "$VenvDir\Scripts\python.exe" -c "import torch, transformers, pytesseract, PIL; print('torch', torch.__version__); print('transformers', transformers.__version__); print('cuda_available', torch.cuda.is_available())"
+& ffmpeg -version | Select-Object -First 1
+& tesseract --version | Select-Object -First 1
 
 Write-Host ""
 Write-Host "Installed."
 Write-Host "Run (UI):"
 Write-Host "  $VenvDir\Scripts\Activate.ps1"
 Write-Host "  python -m wcp.ui_app"
-Write-Host ""
-Write-Host "Optional CLI (advanced):"
-Write-Host "  python whatsapp_export_to_jsonl.py --tz +00:00"
