@@ -30,6 +30,7 @@ ATTACHMENT_RE = re.compile(
     r"^\u200e?(?P<file>[^\s].*?)\s+\((?P<label>ficheiro\s+anexado|arquivo\s+anexado|archivo\s+adjunto|file\s+attached)\)$",
     re.IGNORECASE,
 )
+ATTACHED_INLINE_RE = re.compile(r"^<\s*attached:\s*(?P<file>[^>]+?)\s*>$", re.IGNORECASE)
 TIME_AMPM_RE = re.compile(
     r"^(?P<h>\d{1,2}):(?P<m>\d{2})(:(?P<s>\d{2}))?(?P<ampm>am|pm)$",
     re.IGNORECASE,
@@ -56,9 +57,22 @@ def guess_kind(filename: str) -> str:
     return "unknown"
 
 
+def resolve_tz_offset_str(tz_offset: Optional[str]) -> str:
+    if not tz_offset or str(tz_offset).lower() == "auto":
+        local = datetime.now().astimezone()
+        offset = local.utcoffset() or timedelta(0)
+        total_minutes = int(offset.total_seconds() // 60)
+        sign = "+" if total_minutes >= 0 else "-"
+        total_minutes = abs(total_minutes)
+        hours, minutes = divmod(total_minutes, 60)
+        return f"{sign}{hours:02d}:{minutes:02d}"
+    return str(tz_offset)
+
+
 def _parse_tz_offset(tz_offset: str) -> timezone:
-    sign = 1 if tz_offset.startswith("+") else -1
-    th, tm = map(int, tz_offset[1:].split(":"))
+    normalized = resolve_tz_offset_str(tz_offset)
+    sign = 1 if normalized.startswith("+") else -1
+    th, tm = map(int, normalized[1:].split(":"))
     return timezone(sign * timedelta(hours=th, minutes=tm))
 
 
@@ -312,7 +326,7 @@ def iter_messages(
                 media: list[MediaRef] = []
                 text: Optional[str] = body
 
-                am = ATTACHMENT_RE.match(body)
+                am = ATTACHMENT_RE.match(body) or ATTACHED_INLINE_RE.match(body)
                 if am:
                     fn = am.group("file").strip()
                     kind = guess_kind(fn)

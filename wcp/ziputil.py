@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -16,6 +17,8 @@ def _is_within_directory(base: Path, target: Path) -> bool:
 
 def safe_extract_zip(zip_path: Path, dest_dir: Path) -> Path:
     """Extract zip into dest_dir safely (prevents Zip Slip)."""
+    if dest_dir.exists():
+        shutil.rmtree(dest_dir, ignore_errors=True)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(zip_path, "r") as z:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,37 @@ from typing import Optional
 
 def relpath_posix(path: Path, base: Path) -> str:
     return path.relative_to(base).as_posix()
+
+
+_MEDIA_ARTIFACT_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def normalize_media_ref(file_name: str) -> str:
+    # Normalize to a stable POSIX-like path key.
+    normalized = str(file_name or "").replace("\\", "/").strip()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def media_artifact_stem(file_name: str) -> str:
+    normalized = normalize_media_ref(file_name)
+    base = Path(normalized).stem or "media"
+    safe_base = _MEDIA_ARTIFACT_SAFE_RE.sub("_", base).strip("._-") or "media"
+    digest = hashlib.sha1(normalized.encode("utf-8", errors="replace")).hexdigest()[:12]
+    return f"{safe_base}__{digest}"
+
+
+def legacy_media_artifact_stem(file_name: str) -> str:
+    return Path(file_name).stem
+
+
+def media_artifact_stems(file_name: str) -> list[str]:
+    primary = media_artifact_stem(file_name)
+    legacy = legacy_media_artifact_stem(file_name)
+    if primary == legacy:
+        return [primary]
+    return [primary, legacy]
 
 
 def fmt_eta(seconds: float) -> str:

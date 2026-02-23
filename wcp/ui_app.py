@@ -2,25 +2,24 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
-import threading
 import tempfile
+import threading
+import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import signal
-
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from .benchmark import BenchmarkRequest, run_benchmark
-from .run_config import RunConfig
-from .ziputil import safe_extract_zip, find_export_root
+from .run_config import RunConfig, SUPPORTED_WHISPER_MODELS
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,7 +28,6 @@ DEFAULT_OUT_DIR = BASE_DIR / "out"
 JOB_DIR_NAME = "ui_jobs"
 LOG_MAX_BYTES = 5_000_000
 LOG_TRIM_BYTES = 2_000_000
-BENCH_STATE_DIR_NAME = "ui_benchmarks"
 STATE_INDEX_PATH = DEFAULT_OUT_DIR / "ui_state_index.json"
 
 
@@ -48,26 +46,11 @@ class JobInfo:
         self.force_cpu = False
 
 
-class BenchInfo:
-    def __init__(self, bench_id: str, log_path: Path, result_path: Path, out_dir: Path):
-        self.bench_id = bench_id
-        self.log_path = log_path
-        self.result_path = result_path
-        self.out_dir = out_dir
-        self.status = "queued"
-        self.started_at: Optional[str] = None
-        self.finished_at: Optional[str] = None
-        self.error: Optional[str] = None
-        self.stop_event = threading.Event()
-
-
 app = FastAPI(title="WhatsApp Export UI")
 app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 _jobs: dict[str, JobInfo] = {}
 _jobs_lock = threading.Lock()
-_benchmarks: dict[str, BenchInfo] = {}
-_benchmarks_lock = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -90,31 +73,19 @@ def _job_state_path(job_id: str) -> Path:
     return _job_state_dir() / f"{job_id}.json"
 
 
-def _bench_state_dir() -> Path:
-    # Legacy location (kept for backward compatibility only).
-    return DEFAULT_OUT_DIR / BENCH_STATE_DIR_NAME
-
-
-def _bench_state_path(bench_id: str) -> Path:
-    return _bench_state_dir() / f"{bench_id}.json"
-
-
 def _load_state_index() -> dict:
     if not STATE_INDEX_PATH.exists():
-        return {"jobs": {}, "benchmarks": {}}
+        return {"jobs": {}}
     try:
         obj = json.loads(STATE_INDEX_PATH.read_text(encoding="utf-8"))
         if not isinstance(obj, dict):
-            return {"jobs": {}, "benchmarks": {}}
+            return {"jobs": {}}
         obj.setdefault("jobs", {})
-        obj.setdefault("benchmarks", {})
         if not isinstance(obj["jobs"], dict):
             obj["jobs"] = {}
-        if not isinstance(obj["benchmarks"], dict):
-            obj["benchmarks"] = {}
         return obj
     except Exception:
-        return {"jobs": {}, "benchmarks": {}}
+        return {"jobs": {}}
 
 
 def _save_state_index(index: dict) -> None:
@@ -136,18 +107,6 @@ def _index_job(job_id: str, *, out_dir: Path, state_path: Path, log_path: Path) 
     _save_state_index(idx)
 
 
-def _index_bench(bench_id: str, *, out_dir: Path, state_path: Path, log_path: Path, result_path: Path) -> None:
-    idx = _load_state_index()
-    idx["benchmarks"][bench_id] = {
-        "out_dir": str(out_dir),
-        "state_path": str(state_path),
-        "log_path": str(log_path),
-        "result_path": str(result_path),
-        "updated_at": _now_iso(),
-    }
-    _save_state_index(idx)
-
-
 def _resolve_job_state_path(job_id: str) -> Optional[Path]:
     idx = _load_state_index()
     rec = idx.get("jobs", {}).get(job_id)
@@ -159,17 +118,6 @@ def _resolve_job_state_path(job_id: str) -> Optional[Path]:
     return legacy if legacy.exists() else None
 
 
-def _resolve_bench_state_path(bench_id: str) -> Optional[Path]:
-    idx = _load_state_index()
-    rec = idx.get("benchmarks", {}).get(bench_id)
-    if isinstance(rec, dict):
-        p = rec.get("state_path")
-        if isinstance(p, str) and p:
-            return Path(p)
-    legacy = _bench_state_path(bench_id)
-    return legacy if legacy.exists() else None
-
-
 def _job_public_state(state: dict) -> dict:
     return {
         "job_id": state.get("job_id"),
@@ -177,30 +125,6 @@ def _job_public_state(state: dict) -> dict:
         "exit_code": state.get("exit_code"),
         "started_at": state.get("started_at"),
         "finished_at": state.get("finished_at"),
-    }
-
-
-def _bench_state_dict(bench: BenchInfo) -> dict:
-    return {
-        "bench_id": bench.bench_id,
-        "status": bench.status,
-        "started_at": bench.started_at,
-        "finished_at": bench.finished_at,
-        "log_path": str(bench.log_path),
-        "result_path": str(bench.result_path),
-        "out_dir": str(bench.out_dir),
-        "error": bench.error,
-        "updated_at": _now_iso(),
-    }
-
-
-def _bench_public_state(state: dict) -> dict:
-    return {
-        "bench_id": state.get("bench_id"),
-        "status": state.get("status"),
-        "started_at": state.get("started_at"),
-        "finished_at": state.get("finished_at"),
-        "error": state.get("error"),
     }
 
 
@@ -232,22 +156,6 @@ def _save_job_state(job: JobInfo) -> None:
     _index_job(job.job_id, out_dir=job.out_dir, state_path=path, log_path=job.log_path)
 
 
-def _save_bench_state(bench: BenchInfo) -> None:
-    path = bench.out_dir / BENCH_STATE_DIR_NAME / f"{bench.bench_id}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(_bench_state_dict(bench), f, indent=2, sort_keys=True)
-    tmp.replace(path)
-    _index_bench(
-        bench.bench_id,
-        out_dir=bench.out_dir,
-        state_path=path,
-        log_path=bench.log_path,
-        result_path=bench.result_path,
-    )
-
-
 def _load_job_state(job_id: str) -> Optional[dict]:
     path = _resolve_job_state_path(job_id)
     if not path or not path.exists():
@@ -258,14 +166,145 @@ def _load_job_state(job_id: str) -> Optional[dict]:
         return None
 
 
-def _load_bench_state(bench_id: str) -> Optional[dict]:
-    path = _resolve_bench_state_path(bench_id)
-    if not path or not path.exists():
-        return None
+def _persist_loaded_state(job_id: str, state: dict) -> None:
+    path = _resolve_job_state_path(job_id)
+    if not path:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, sort_keys=True)
+    tmp.replace(path)
+
+    out_dir_raw = state.get("out_dir")
+    log_path_raw = state.get("log_path")
+    if isinstance(out_dir_raw, str) and out_dir_raw and isinstance(log_path_raw, str) and log_path_raw:
+        try:
+            _index_job(job_id, out_dir=Path(out_dir_raw), state_path=path, log_path=Path(log_path_raw))
+        except Exception:
+            pass
+
+
+def _is_pid_running(pid: object) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            proc = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            out = (proc.stdout or "").strip()
+            if not out:
+                return False
+            if "No tasks are running" in out:
+                return False
+            return str(pid) in out
+        except Exception:
+            return False
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        os.kill(pid, 0)
+        return True
     except Exception:
+        return False
+
+
+def _reconcile_loaded_state(job_id: str, state: dict) -> dict:
+    if state.get("status") != "running":
+        return state
+    if _is_pid_running(state.get("pid")):
+        return state
+    fixed = dict(state)
+    fixed["status"] = "error"
+    fixed["exit_code"] = 1 if fixed.get("exit_code") is None else fixed.get("exit_code")
+    if not fixed.get("finished_at"):
+        fixed["finished_at"] = _now_iso()
+    fixed["updated_at"] = _now_iso()
+    _persist_loaded_state(job_id, fixed)
+    return fixed
+
+
+def _find_active_job() -> Optional[str]:
+    with _jobs_lock:
+        for job_id, job in _jobs.items():
+            if job.process and job.process.poll() is None:
+                return job_id
+
+    idx = _load_state_index()
+    jobs = idx.get("jobs", {})
+    if not isinstance(jobs, dict):
         return None
+    for job_id, rec in jobs.items():
+        if not isinstance(rec, dict):
+            continue
+        p = rec.get("state_path")
+        if not isinstance(p, str) or not p:
+            continue
+        state_path = Path(p)
+        if not state_path.exists():
+            continue
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        state = _reconcile_loaded_state(str(job_id), state)
+        if state.get("status") == "running":
+            return str(job_id)
+    return None
+
+
+def _append_stop_manifest_if_open(out_dir: Path, *, reason: str) -> None:
+    manifest_path = out_dir / "manifest.jsonl"
+    if not manifest_path.exists():
+        return
+    try:
+        last_start = -1
+        last_end = -1
+        with manifest_path.open("r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                t = obj.get("type")
+                if t == "run_start":
+                    last_start = i
+                elif t == "run_end":
+                    last_end = i
+        if last_start <= last_end:
+            return
+
+        now_iso = _now_iso()
+        with manifest_path.open("a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "type": "run_stopped",
+                        "reason": reason,
+                        "event_ts": now_iso,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            f.write(
+                json.dumps(
+                    {
+                        "type": "run_end",
+                        "elapsed_seconds": 0.0,
+                        "stats": {},
+                        "status": "stopped",
+                        "event_ts": now_iso,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
 
 
 def _read_tail(path: Path, max_bytes: int = 20000) -> str:
@@ -289,132 +328,110 @@ def _parse_bool(val: Optional[str]) -> bool:
     return str(val).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _parse_int(val: Optional[str]) -> Optional[int]:
-    if val is None or str(val).strip() == "":
-        return None
-    try:
-        return int(val)
-    except Exception:
-        return None
-
-
-def _parse_float(val: Optional[str]) -> Optional[float]:
-    if val is None or str(val).strip() == "":
-        return None
-    try:
-        return float(val)
-    except Exception:
-        return None
-
-
-def _parse_csv(val: Optional[str]) -> list[str]:
-    if not val:
-        return []
-    items = []
-    for raw in str(val).split(","):
-        item = raw.strip()
-        if item:
-            items.append(item)
-    return items
-
-
-def _default_workers() -> int:
-    return min(2, os.cpu_count() or 4)
-
-
 def _build_run_config(form, zip_path: Path, out_dir_str: str) -> RunConfig:
     defaults = RunConfig(folder=str(zip_path))
-
-    progress_every = _parse_int(form.get("progress_every"))
-    if progress_every is None:
-        progress_every = defaults.progress_every
-
-    md_max_chars = _parse_int(form.get("md_max_chars"))
-    if md_max_chars is None:
-        md_max_chars = defaults.md_max_chars
-
-    audio_workers = _parse_int(form.get("audio_workers"))
-    if audio_workers is None:
-        audio_workers = _default_workers()
-
-    ocr_workers = _parse_int(form.get("ocr_workers"))
-    if ocr_workers is None:
-        ocr_workers = _default_workers()
-
-    ocr_max = _parse_int(form.get("ocr_max"))
-    if ocr_max is None:
-        ocr_max = defaults.ocr_max
-
-    ocr_edge_threshold = _parse_float(form.get("ocr_edge_threshold"))
-    if ocr_edge_threshold is None:
-        ocr_edge_threshold = defaults.ocr_edge_threshold
-
-    ocr_downscale = _parse_int(form.get("ocr_downscale"))
-    if ocr_downscale is None:
-        ocr_downscale = defaults.ocr_downscale
+    force_cpu = _parse_bool(form.get("force_cpu"))
+    no_transcribe = _parse_bool(form.get("no_transcribe"))
+    no_ocr = _parse_bool(form.get("no_ocr"))
 
     return RunConfig(
         folder=str(zip_path),
-        tz=str(form.get("tz") or defaults.tz),
         out=out_dir_str or defaults.out,
-        quiet=_parse_bool(form.get("quiet")),
-        progress_every=progress_every,
-        format=str(form.get("format") or defaults.format),
-        date_order=str(form.get("date_order") or defaults.date_order),
-        no_resume=_parse_bool(form.get("no_resume")),
-        no_manifest=_parse_bool(form.get("no_manifest")),
-        no_report=_parse_bool(form.get("no_report")),
-        no_md=_parse_bool(form.get("no_md")),
-        md_max_chars=md_max_chars,
-        no_by_month=_parse_bool(form.get("no_by_month")),
-        audio_workers=audio_workers,
-        ocr_workers=ocr_workers,
-        hash_media=_parse_bool(form.get("hash_media")),
-        me=_parse_csv(form.get("me")),
-        them=_parse_csv(form.get("them")),
-        convert_audio=str(form.get("convert_audio") or defaults.convert_audio),
-        no_transcribe=_parse_bool(form.get("no_transcribe")),
+        quiet=False,
+        force_cpu=force_cpu,
+        no_transcribe=no_transcribe,
         whisper_model=str(form.get("whisper_model") or defaults.whisper_model),
-        lang=str(form.get("lang") or defaults.lang),
-        transcribe_backend=str(form.get("transcribe_backend") or defaults.transcribe_backend),
-        no_ocr=_parse_bool(form.get("no_ocr")),
-        ocr_lang=str(form.get("ocr_lang") or defaults.ocr_lang),
-        ocr_mode=str(form.get("ocr_mode") or defaults.ocr_mode),
-        ocr_max=ocr_max,
-        ocr_edge_threshold=ocr_edge_threshold,
-        ocr_downscale=ocr_downscale,
-        only_transcribe=_parse_bool(form.get("only_transcribe")),
-        only_ocr=_parse_bool(form.get("only_ocr")),
+        speed_preset=str(form.get("speed_preset") or defaults.speed_preset),
+        no_ocr=no_ocr,
     )
 
 
-def _check_transcribe_backend(cfg: RunConfig) -> Optional[str]:
-    if cfg.no_transcribe or cfg.only_ocr:
+def _check_transcription_runtime(cfg: RunConfig) -> Optional[str]:
+    if cfg.no_transcribe:
         return None
     info = _runtime_info()
-    openai_ok = bool(info.get("openai_whisper_available") or info.get("whisper_available"))
-    faster_ok = bool(info.get("faster_whisper_available"))
-    backend = cfg.transcribe_backend
-    if backend == "openai" and not openai_ok:
-        return "OpenAI Whisper is not installed."
-    if backend == "faster" and not faster_ok:
-        return "Faster Whisper is not installed."
-    if backend == "auto" and not (openai_ok or faster_ok):
-        return "No transcription backend is installed."
+    if not info.get("transformers_available"):
+        return "Transformers (HF) is not installed."
     return None
 
 
-def _check_bench_backend(backend: str) -> Optional[str]:
+def _system_dependency_hints() -> dict[str, str]:
+    if os.name == "nt":
+        return {
+            "ffmpeg": "Install ffmpeg: winget install --id Gyan.FFmpeg -e",
+            "tesseract": "Install tesseract: winget install --id UB-Mannheim.TesseractOCR -e",
+        }
+    if shutil.which("apt-get"):
+        return {
+            "ffmpeg": "Install ffmpeg: sudo apt-get update && sudo apt-get install -y ffmpeg",
+            "tesseract": "Install tesseract: sudo apt-get update && sudo apt-get install -y tesseract-ocr",
+        }
+    if shutil.which("brew"):
+        return {
+            "ffmpeg": "Install ffmpeg: brew install ffmpeg",
+            "tesseract": "Install tesseract: brew install tesseract",
+        }
+    return {
+        "ffmpeg": "Install ffmpeg using your system package manager.",
+        "tesseract": "Install tesseract using your system package manager.",
+    }
+
+
+def _check_runtime_requirements(cfg: RunConfig) -> list[str]:
     info = _runtime_info()
-    openai_ok = bool(info.get("openai_whisper_available") or info.get("whisper_available"))
-    faster_ok = bool(info.get("faster_whisper_available"))
-    if backend == "openai" and not openai_ok:
-        return "OpenAI Whisper is not installed."
-    if backend == "faster" and not faster_ok:
-        return "Faster Whisper is not installed."
-    if backend == "auto" and not (openai_ok or faster_ok):
-        return "No transcription backend is installed."
-    return None
+    hints = info.get("install_hints", {})
+    errors: list[str] = []
+
+    if not cfg.no_transcribe:
+        if not info.get("transformers_available"):
+            errors.append("Missing Python package: transformers.")
+        if not info.get("torch_available"):
+            errors.append("Missing Python package: torch.")
+        if not info.get("ffmpeg_available"):
+            msg = "Missing system dependency: ffmpeg."
+            hint = hints.get("ffmpeg")
+            errors.append(f"{msg} {hint}" if hint else msg)
+
+    if not cfg.no_ocr:
+        if not info.get("tesseract_available"):
+            msg = "Missing system dependency: tesseract."
+            hint = hints.get("tesseract")
+            errors.append(f"{msg} {hint}" if hint else msg)
+
+    return errors
+
+
+def _check_audio_test_requirements(info: dict) -> list[str]:
+    hints = info.get("install_hints", {})
+    errors: list[str] = []
+    if not info.get("transformers_available"):
+        errors.append("Missing Python package: transformers.")
+    if not info.get("torch_available"):
+        errors.append("Missing Python package: torch.")
+    if not info.get("ffmpeg_available"):
+        msg = "Missing system dependency: ffmpeg."
+        hint = hints.get("ffmpeg")
+        errors.append(f"{msg} {hint}" if hint else msg)
+    return errors
+
+
+def _transcribe_audio_sample(src_audio: Path, *, model: str, force_cpu: bool) -> tuple[str, float]:
+    from .media import convert_to_wav
+    from .transcribe import Transcriber
+
+    wav_path = src_audio.parent / "sample_input_16k.wav"
+    started = time.perf_counter()
+    convert_to_wav(src_audio, wav_path)
+
+    transcriber = Transcriber(model, device=("cpu" if force_cpu else None))
+    if not transcriber.available():
+        detail = transcriber.backend_error()
+        if detail:
+            raise RuntimeError(f"HF transcription backend is unavailable. {detail}")
+        raise RuntimeError("HF transcription backend is unavailable.")
+    text = transcriber.transcribe_wav(wav_path, language=None)
+    elapsed = time.perf_counter() - started
+    return text, elapsed
 
 
 def _trim_log(path: Path) -> None:
@@ -471,54 +488,84 @@ async def _save_upload_file(upload: UploadFile, dst: Path, chunk_size: int = 102
 def _runtime_info() -> dict:
     cuda_available: Optional[bool] = None
     torch_version: Optional[str] = None
-    whisper_available = False
-    faster_whisper_available = False
-    windows_symlink_ok: Optional[bool] = None
+    transformers_available = False
+    torch_available = False
+    ffmpeg_available = bool(shutil.which("ffmpeg"))
+    tesseract_available = bool(shutil.which("tesseract"))
 
     try:
         import torch  # type: ignore
+
         torch_version = getattr(torch, "__version__", None)
         cuda_available = bool(torch.cuda.is_available())
+        torch_available = True
     except Exception:
         cuda_available = None
         torch_version = None
+        torch_available = False
 
     try:
-        import whisper  # type: ignore
-        whisper_available = True
-    except Exception:
-        whisper_available = False
+        import transformers  # type: ignore
 
-    try:
-        import faster_whisper  # type: ignore
-        faster_whisper_available = True
+        transformers_available = True
     except Exception:
-        faster_whisper_available = False
-
-    if os.name == "nt":
-        try:
-            with tempfile.TemporaryDirectory() as d:
-                base = Path(d)
-                target = base / "t.txt"
-                link = base / "l.txt"
-                target.write_text("x", encoding="utf-8")
-                os.symlink(str(target), str(link))
-            windows_symlink_ok = True
-        except Exception:
-            windows_symlink_ok = False
+        transformers_available = False
 
     return {
         "cuda_available": cuda_available,
+        "torch_available": torch_available,
         "torch_version": torch_version,
-        "whisper_available": whisper_available,
-        "openai_whisper_available": whisper_available,
-        "faster_whisper_available": faster_whisper_available,
-        "windows_symlink_ok": windows_symlink_ok,
-        # Even if symlinks aren't allowed, faster-whisper can work if the model is already cached.
-        # Downloads of *new* models may fail without Developer Mode/Admin on Windows.
-        "faster_whisper_usable": bool(faster_whisper_available),
-        "faster_whisper_download_may_need_symlink": bool(faster_whisper_available and windows_symlink_ok is False),
+        "transformers_available": transformers_available,
+        "ffmpeg_available": ffmpeg_available,
+        "tesseract_available": tesseract_available,
+        "install_hints": _system_dependency_hints(),
+        "supported_transcription_backend": "hf",
+        "supported_transcription_models": list(SUPPORTED_WHISPER_MODELS),
+        "supported_speed_presets": ["auto", "off"],
     }
+
+
+def _request_stop_pid(pid: object, *, timeout_seconds: float = 8.0) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return True
+    try:
+        if os.name == "nt":
+            try:
+                os.kill(pid, signal.CTRL_BREAK_EVENT)
+            except Exception:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except Exception:
+                    return False
+        else:
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except Exception:
+                os.kill(pid, signal.SIGTERM)
+    except Exception:
+        return False
+
+    deadline = time.time() + max(0.5, timeout_seconds)
+    while time.time() < deadline:
+        if not _is_pid_running(pid):
+            return True
+        time.sleep(0.2)
+    return not _is_pid_running(pid)
+
+
+def _force_stop_pid(pid: object) -> None:
+    if not isinstance(pid, int) or pid <= 0:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
 
 
 def _run_job(job: JobInfo, argv: list[str]) -> None:
@@ -573,34 +620,6 @@ def _run_job(job: JobInfo, argv: list[str]) -> None:
         log_writer.close()
 
 
-def _run_benchmark_job(bench: BenchInfo, req: BenchmarkRequest) -> None:
-    bench.status = "running"
-    bench.started_at = _now_iso()
-    _save_bench_state(bench)
-    bench.log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_writer = _LogWriter(bench.log_path)
-
-    def log(msg: str) -> None:
-        log_writer.write(msg + "\n")
-
-    try:
-        result = run_benchmark(req, log, bench.stop_event)
-        bench.result_path.parent.mkdir(parents=True, exist_ok=True)
-        bench.result_path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
-        if bench.stop_event.is_set():
-            bench.status = "stopped"
-        else:
-            bench.status = "done"
-    except Exception as e:
-        bench.status = "error"
-        bench.error = str(e)
-        log(f"ERROR: {e}")
-    finally:
-        bench.finished_at = _now_iso()
-        _save_bench_state(bench)
-        log_writer.close()
-
-
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(UI_DIR / "index.html")
@@ -613,6 +632,9 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
     out_dir_str = str(form.get("out") or "out")
     out_dir = _resolve_out_dir(out_dir_str)
     out_dir.mkdir(parents=True, exist_ok=True)
+    active_job_id = _find_active_job()
+    if active_job_id:
+        return JSONResponse({"error": "job_already_running", "job_id": active_job_id}, status_code=409)
     uploads_dir = out_dir / "_uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
@@ -626,16 +648,19 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
     if errors:
         return JSONResponse({"error": "invalid_config", "details": errors}, status_code=400)
 
-    backend_error = _check_transcribe_backend(cfg)
+    backend_error = _check_transcription_runtime(cfg)
     if backend_error:
         return JSONResponse({"error": "backend_unavailable", "details": backend_error}, status_code=400)
+    req_errors = _check_runtime_requirements(cfg)
+    if req_errors:
+        return JSONResponse({"error": "missing_requirements", "details": req_errors}, status_code=400)
 
     argv = cfg.to_argv(include_prog=False)
     job_id = uuid.uuid4().hex[:10]
     log_dir = out_dir / "ui_logs"
     log_path = log_dir / f"{job_id}.log"
     job = JobInfo(job_id=job_id, log_path=log_path, out_dir=out_dir, cfg=cfg, argv=argv)
-    job.force_cpu = _parse_bool(form.get("force_cpu"))
+    job.force_cpu = cfg.force_cpu
 
     with _jobs_lock:
         _jobs[job_id] = job
@@ -647,63 +672,48 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
     return JSONResponse({"job_id": job_id})
 
 
-@app.post("/api/benchmark")
-async def run_benchmark_api(request: Request, zip: UploadFile = File(...)) -> JSONResponse:
+@app.post("/api/transcribe-test")
+async def transcribe_test(request: Request, audio: UploadFile = File(...)) -> JSONResponse:
     form = await request.form()
+    model = str(form.get("whisper_model") or "medium")
+    force_cpu = _parse_bool(form.get("force_cpu"))
 
-    out_dir_str = str(form.get("out") or "out")
-    out_dir = _resolve_out_dir(out_dir_str)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    uploads_dir = out_dir / "_uploads"
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-
-    orig_name = Path(zip.filename or "export.zip").name
-    safe_name = f"{uuid.uuid4().hex}_{orig_name}"
-    zip_path = uploads_dir / safe_name
-    await _save_upload_file(zip, zip_path)
-
-    extract_dir = out_dir / "_bench_extracted" / zip_path.stem
-    safe_extract_zip(zip_path, extract_dir)
-    folder = find_export_root(extract_dir)
-
-    audio_samples = _parse_int(form.get("bench_audio_samples")) or 8
-    image_samples = _parse_int(form.get("bench_image_samples")) or 0
-    backend = str(form.get("bench_backend") or "auto")
-    lang = str(form.get("bench_lang") or "pt")
-
-    models = _parse_csv(form.get("bench_models"))
-    if not models:
-        models = ["base", "small", "medium"]
-
-    bench_error = _check_bench_backend(backend)
-    if bench_error:
-        return JSONResponse({"error": "backend_unavailable", "details": bench_error}, status_code=400)
-
-    req = BenchmarkRequest(
-        folder=folder,
-        out_dir=out_dir,
-        audio_samples=audio_samples,
-        image_samples=image_samples,
-        models=models,
-        backend=backend,
-        lang=lang,
-        include_ocr=_parse_bool(form.get("bench_include_ocr")),
+    cfg = RunConfig(
+        folder=".",
+        out="out",
+        quiet=True,
+        force_cpu=force_cpu,
+        no_transcribe=False,
+        whisper_model=model,
+        no_ocr=True,
     )
+    errors = cfg.validate()
+    if errors:
+        return JSONResponse({"error": "invalid_config", "details": errors}, status_code=400)
 
-    bench_id = uuid.uuid4().hex[:10]
-    log_dir = out_dir / "benchmarks"
-    log_path = log_dir / f"{bench_id}.log"
-    result_path = log_dir / f"{bench_id}.json"
-    bench = BenchInfo(bench_id=bench_id, log_path=log_path, result_path=result_path, out_dir=out_dir)
+    info = _runtime_info()
+    req_errors = _check_audio_test_requirements(info)
+    if req_errors:
+        return JSONResponse({"error": "missing_requirements", "details": req_errors}, status_code=400)
 
-    with _benchmarks_lock:
-        _benchmarks[bench_id] = bench
-    _save_bench_state(bench)
+    orig_name = Path(audio.filename or "sample_audio").name
+    try:
+        with tempfile.TemporaryDirectory(prefix="wcp-audio-test-") as td:
+            sample_path = Path(td) / orig_name
+            await _save_upload_file(audio, sample_path)
+            text, elapsed = _transcribe_audio_sample(sample_path, model=model, force_cpu=force_cpu)
+    except Exception as e:
+        return JSONResponse({"error": "transcription_failed", "details": str(e)}, status_code=500)
 
-    t = threading.Thread(target=_run_benchmark_job, args=(bench, req), daemon=True)
-    t.start()
-
-    return JSONResponse({"bench_id": bench_id})
+    return JSONResponse(
+        {
+            "model": model,
+            "audio_file": orig_name,
+            "force_cpu": force_cpu,
+            "elapsed_seconds": round(elapsed, 3),
+            "text": text,
+        }
+    )
 
 
 @app.get("/api/jobs/{job_id}")
@@ -714,7 +724,15 @@ def job_status(job_id: str) -> JSONResponse:
         state = _load_job_state(job_id)
         if not state:
             return JSONResponse({"error": "job_not_found"}, status_code=404)
+        state = _reconcile_loaded_state(job_id, state)
         return JSONResponse(_job_public_state(state))
+    if job.status == "running" and job.process and job.process.poll() is not None:
+        code = job.process.poll()
+        job.exit_code = int(code) if code is not None else 1
+        job.status = "done" if job.exit_code == 0 else "error"
+        if not job.finished_at:
+            job.finished_at = _now_iso()
+        _save_job_state(job)
     return JSONResponse(_job_public_state(_job_state_dict(job)))
 
 
@@ -733,50 +751,6 @@ def job_log(job_id: str) -> PlainTextResponse:
     return PlainTextResponse(_read_tail(job.log_path))
 
 
-@app.get("/api/benchmarks/{bench_id}")
-def bench_status(bench_id: str) -> JSONResponse:
-    with _benchmarks_lock:
-        bench = _benchmarks.get(bench_id)
-    if not bench:
-        state = _load_bench_state(bench_id)
-        if not state:
-            return JSONResponse({"error": "bench_not_found"}, status_code=404)
-        return JSONResponse(_bench_public_state(state))
-    return JSONResponse(_bench_public_state(_bench_state_dict(bench)))
-
-
-@app.get("/api/benchmarks/{bench_id}/log")
-def bench_log(bench_id: str) -> PlainTextResponse:
-    with _benchmarks_lock:
-        bench = _benchmarks.get(bench_id)
-    if not bench:
-        state = _load_bench_state(bench_id)
-        if not state:
-            return PlainTextResponse("bench_not_found", status_code=404)
-        log_path = Path(state.get("log_path") or "")
-        if not log_path:
-            return PlainTextResponse("log_not_found", status_code=404)
-        return PlainTextResponse(_read_tail(log_path))
-    return PlainTextResponse(_read_tail(bench.log_path))
-
-
-@app.get("/api/benchmarks/{bench_id}/result")
-def bench_result(bench_id: str) -> JSONResponse:
-    with _benchmarks_lock:
-        bench = _benchmarks.get(bench_id)
-    if not bench:
-        state = _load_bench_state(bench_id)
-        if not state:
-            return JSONResponse({"error": "bench_not_found"}, status_code=404)
-        result_path = Path(state.get("result_path") or "")
-        if not result_path.exists():
-            return JSONResponse({"error": "result_not_ready"}, status_code=404)
-        return JSONResponse(json.loads(result_path.read_text(encoding="utf-8")))
-    if not bench.result_path.exists():
-        return JSONResponse({"error": "result_not_ready"}, status_code=404)
-    return JSONResponse(json.loads(bench.result_path.read_text(encoding="utf-8")))
-
-
 @app.get("/api/runtime")
 def runtime_info() -> JSONResponse:
     return JSONResponse(_runtime_info())
@@ -790,42 +764,38 @@ def stop_job(job_id: str) -> JSONResponse:
         state = _load_job_state(job_id)
         if not state:
             return JSONResponse({"error": "job_not_found"}, status_code=404)
-        return JSONResponse({"status": state.get("status"), "error": "job_not_running"}, status_code=409)
+        state = _reconcile_loaded_state(job_id, state)
+        if state.get("status") != "running":
+            return JSONResponse({"status": state.get("status"), "error": "job_not_running"}, status_code=409)
+        pid = state.get("pid")
+        if not _request_stop_pid(pid):
+            _force_stop_pid(pid)
+        state["status"] = "stopped"
+        state["finished_at"] = _now_iso()
+        state["updated_at"] = _now_iso()
+        if state.get("exit_code") is None:
+            state["exit_code"] = 130
+        _persist_loaded_state(job_id, state)
+        out_dir_raw = state.get("out_dir")
+        if isinstance(out_dir_raw, str) and out_dir_raw:
+            _append_stop_manifest_if_open(Path(out_dir_raw), reason="stopped_via_api")
+        return JSONResponse({"status": state["status"]})
 
     if job.process and job.process.poll() is None:
         try:
             pid = job.process.pid
-            if os.name == "nt":
-                # Kill the whole process tree (ffmpeg/whisper child processes).
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                try:
-                    os.killpg(pid, signal.SIGTERM)
-                except Exception:
-                    job.process.terminate()
+            if not _request_stop_pid(pid):
+                _force_stop_pid(pid)
             job.status = "stopped"
             job.finished_at = _now_iso()
+            if job.exit_code is None:
+                job.exit_code = 130
             _save_job_state(job)
+            _append_stop_manifest_if_open(job.out_dir, reason="stopped_via_api")
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     return JSONResponse({"status": job.status})
-
-
-@app.post("/api/benchmarks/{bench_id}/stop")
-def stop_bench(bench_id: str) -> JSONResponse:
-    with _benchmarks_lock:
-        bench = _benchmarks.get(bench_id)
-    if not bench:
-        state = _load_bench_state(bench_id)
-        if not state:
-            return JSONResponse({"error": "bench_not_found"}, status_code=404)
-        return JSONResponse({"status": state.get("status"), "error": "bench_not_running"}, status_code=409)
-    bench.stop_event.set()
-    bench.status = "stopped"
-    bench.finished_at = _now_iso()
-    _save_bench_state(bench)
-    return JSONResponse({"status": bench.status})
 
 
 def main() -> None:
