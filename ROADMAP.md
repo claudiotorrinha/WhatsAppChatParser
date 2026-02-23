@@ -14,11 +14,14 @@
 ## Phase 1 — Core reliability and maintainability
 - [x] Central `RunConfig` shared by CLI and UI.
 - [x] Persist UI job state to disk for refresh-safe status.
+- [x] Reconcile stale persisted `running` job states (dead PID recovery).
 - [x] Guard transcription backend selection in the UI.
 - [x] Cap UI log size and trim safely.
 - [x] Stream zip uploads to disk (avoid loading large uploads into RAM).
 - [x] Stop/abort terminates process trees (ffmpeg/whisper child processes).
 - [x] Align UI/CLI defaults for transcription and OCR language (auto-friendly).
+- [x] Auto-detect export root consistently for folder and zip inputs.
+- [x] Transcript quality validation + end-of-run retry for flagged audio transcripts.
 - [ ] Add explicit errors for missing media or permissions.
 - [ ] Expand parser fixtures (PT/EN/iOS/Android edge cases).
 
@@ -26,7 +29,7 @@
 - [x] Basics vs Advanced UI layout to reduce option overload.
 - [x] Benchmark mode (sample-based speed/quality + estimate).
 - [ ] Job history view (last N runs, status, outputs).
-- [ ] Per-step progress summaries (audio/ocr/output phases).
+- [x] Coherent progress summaries including transcription backlog/retry phase.
 - [x] Clear run end-state callouts (idle/running/done/error).
 - [x] Surface backend availability directly in settings.
 

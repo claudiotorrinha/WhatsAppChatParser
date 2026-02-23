@@ -30,6 +30,10 @@ class TestParserDetect(unittest.TestCase):
         self.assertEqual(len(msgs), 2)
         self.assertTrue(msgs[0].ts.startswith("2025-09-20T09:41:00+00:00"))
 
+    def test_resolve_tz_offset_auto_returns_hhmm(self):
+        tz = parser.resolve_tz_offset_str("auto")
+        self.assertRegex(tz, r"^[+-]\d{2}:\d{2}$")
+
     def test_detect_android_mdy(self):
         chat = "9/20/2025, 9:41 AM - John: hi\n"
         path = self._write_chat(chat)
@@ -54,6 +58,28 @@ class TestParserDetect(unittest.TestCase):
 
     def test_attachment_detection(self):
         chat = "9/20/2025, 9:41 AM - John: IMG-1.jpg (file attached)\n"
+        path = self._write_chat(chat)
+        msgs = list(parser.iter_messages(path, tz_offset="+00:00"))
+        self.assertEqual(len(msgs), 1)
+        msg = msgs[0]
+        self.assertEqual(msg.type, "image")
+        self.assertEqual(len(msg.media), 1)
+        self.assertEqual(msg.media[0].file, "IMG-1.jpg")
+        self.assertIsNone(msg.text)
+
+    def test_attachment_detection_attached_tag_android(self):
+        chat = "9/20/2025, 9:41 AM - John: <attached: PTT-1.opus>\n"
+        path = self._write_chat(chat)
+        msgs = list(parser.iter_messages(path, tz_offset="+00:00"))
+        self.assertEqual(len(msgs), 1)
+        msg = msgs[0]
+        self.assertEqual(msg.type, "audio")
+        self.assertEqual(len(msg.media), 1)
+        self.assertEqual(msg.media[0].file, "PTT-1.opus")
+        self.assertIsNone(msg.text)
+
+    def test_attachment_detection_attached_tag_ios(self):
+        chat = "[20/09/2025, 21:41] John: <attached: IMG-1.jpg>\n"
         path = self._write_chat(chat)
         msgs = list(parser.iter_messages(path, tz_offset="+00:00"))
         self.assertEqual(len(msgs), 1)

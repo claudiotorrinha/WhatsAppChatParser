@@ -15,3 +15,10 @@ tesseract.txt
 
 .DS_Store
 Thumbs.db
+processed_redone/ocr
+processed_redone/converted
+processed_redone/_extracted
+processed_redone/_uploads
+processed_redone/ui_jobs
+processed_redone/ui_logs
+processed_redone
