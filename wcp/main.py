@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
+import shutil
 import sys
 import threading
 import time
@@ -11,10 +12,10 @@ from pathlib import Path
 from .manifest import ManifestLogger
 from .media import MediaProcessor
 from .output import write_outputs
-from .parser import count_total_messages, find_chat_txt, iter_messages, resolve_tz_offset_str
+from .parser import find_chat_txt, iter_messages, resolve_tz_offset_str
 from .report import write_report
 from .run_config import RunConfig, SUPPORTED_WHISPER_MODELS
-from .transcribe import Transcriber
+from .transcribe import Transcriber, resolve_transcribe_runtime
 from .util import fmt_eta
 from .ziputil import find_export_root, safe_extract_zip
 
@@ -66,6 +67,18 @@ def _auto_workers() -> int:
     return max(1, min(4, os.cpu_count() or 4))
 
 
+def _effective_progress(total_tasks: int, media_done: int, transcribe_remaining: int) -> tuple[int, float]:
+    if total_tasks <= 0:
+        return 0, 100.0
+    media_done = max(0, min(total_tasks, int(media_done)))
+    transcribe_remaining = max(0, int(transcribe_remaining))
+    # A queued transcription belongs to an audio task already counted in media_done,
+    # so subtract remaining queue work from "done" to keep one coherent denominator.
+    effective_done = max(0, media_done - transcribe_remaining)
+    pct = (float(effective_done) / float(total_tasks)) * 100.0
+    return effective_done, pct
+
+
 def _strip_legacy_args(args: list[str]) -> tuple[list[str], list[str]]:
     cleaned: list[str] = []
     ignored: list[str] = []
@@ -114,6 +127,12 @@ def build_arg_parser() -> "argparse.ArgumentParser":
         default="medium",
         help="Transcription model name",
     )
+    ap.add_argument(
+        "--speed-preset",
+        choices=["auto", "off"],
+        default="auto",
+        help="Transcription speed profile (auto favors medium+cuda when possible)",
+    )
     ap.add_argument("--no-ocr", action="store_true", help="Disable image OCR")
     return ap
 
@@ -144,10 +163,12 @@ def run(argv: list[str]) -> int:
         extract_dir = out_dir / "_extracted" / zip_path.stem
         if not cfg.quiet:
             sys.stderr.write(f"Extracting zip to: {extract_dir}\n")
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir, ignore_errors=True)
         safe_extract_zip(zip_path, extract_dir)
         folder = find_export_root(extract_dir)
     else:
-        folder = folder_path
+        folder = find_export_root(folder_path) if folder_path.is_dir() else folder_path
 
     chat_txt = find_chat_txt(folder)
     audio_workers = _auto_workers()
@@ -156,6 +177,23 @@ def run(argv: list[str]) -> int:
 
     manifest = ManifestLogger(out_dir / "manifest.jsonl", enabled=True)
     manifest.open()
+
+    run_started = time.perf_counter()
+    effective_whisper_model = cfg.whisper_model
+    effective_transcribe_device = ("cpu" if cfg.force_cpu else None)
+    runtime_decision = {
+        "requested_model": cfg.whisper_model,
+        "effective_model": effective_whisper_model,
+        "device": effective_transcribe_device,
+        "reason": "explicit_settings",
+        "speed_preset": cfg.speed_preset,
+    }
+    if not cfg.no_transcribe:
+        effective_whisper_model, effective_transcribe_device, runtime_decision = resolve_transcribe_runtime(
+            cfg.whisper_model,
+            force_cpu=cfg.force_cpu,
+            speed_preset=cfg.speed_preset,
+        )
 
     manifest.log(
         {
@@ -171,6 +209,10 @@ def run(argv: list[str]) -> int:
             "convert_audio": ("none" if cfg.no_transcribe else DEFAULT_AUDIO_CONVERT),
             "transcribe": (not cfg.no_transcribe),
             "whisper_model": cfg.whisper_model,
+            "whisper_model_requested": cfg.whisper_model,
+            "whisper_model_effective": effective_whisper_model,
+            "speed_preset": cfg.speed_preset,
+            "transcribe_device_preference": effective_transcribe_device,
             "force_cpu": cfg.force_cpu,
             "lang": "auto",
             "ocr": (not cfg.no_ocr),
@@ -180,12 +222,10 @@ def run(argv: list[str]) -> int:
         }
     )
 
-    total_msgs = None
     if not cfg.quiet:
-        total_msgs = count_total_messages(chat_txt, DEFAULT_FORMAT, DEFAULT_DATE_ORDER)
         sys.stderr.write(f"Chat file: {chat_txt.name}\n")
-        sys.stderr.write(f"Detected messages: {total_msgs}\n")
 
+    parse_started = time.perf_counter()
     messages = list(
         iter_messages(
             chat_txt,
@@ -194,6 +234,9 @@ def run(argv: list[str]) -> int:
             date_order_override=DEFAULT_DATE_ORDER,
         )
     )
+    parse_elapsed = time.perf_counter() - parse_started
+    if not cfg.quiet:
+        sys.stderr.write(f"Detected messages: {len(messages)}\n")
 
     audio_files = sorted({m.file for msg in messages for m in msg.media if m.kind == "audio"})
     image_files = sorted({m.file for msg in messages for m in msg.media if m.kind == "image"})
@@ -209,16 +252,43 @@ def run(argv: list[str]) -> int:
         "audio_transcripts_created": 0,
         "audio_transcripts_skipped": 0,
         "audio_transcripts_failed": 0,
+        "audio_transcript_quality_flagged": 0,
+        "audio_transcript_retry_attempted": 0,
+        "audio_transcript_retry_succeeded": 0,
+        "audio_transcript_retry_failed": 0,
+        "audio_transcript_retry_still_flagged": 0,
         "image_ocr_created": 0,
         "image_ocr_skipped": 0,
         "image_ocr_failed": 0,
         "image_ocr_filtered": 0,
         "image_ocr_deferred": 0,
+        "audio_convert_seconds": 0.0,
+        "audio_transcribe_seconds": 0.0,
+        "audio_transcript_retry_seconds": 0.0,
+        "audio_meta_seconds": 0.0,
+        "image_ocr_seconds": 0.0,
+        "image_meta_seconds": 0.0,
+        "stage_parse_seconds": parse_elapsed,
+        "stage_media_preprocess_seconds": 0.0,
+        "stage_output_write_seconds": 0.0,
+        "stage_total_seconds": 0.0,
+        "transcriber_init_seconds": 0.0,
     }
+    manifest.log({"type": "stage_timing", "stage": "parse_messages", "elapsed_seconds": parse_elapsed})
 
     transcriber = None
     if not cfg.no_transcribe:
-        t = Transcriber(cfg.whisper_model, device=("cpu" if cfg.force_cpu else None))
+        if not cfg.quiet and runtime_decision.get("reason", "").startswith("auto_speed"):
+            reason = runtime_decision.get("reason")
+            sys.stderr.write(
+                "Speed preset selected transcription runtime: "
+                f"model={effective_whisper_model}, device={effective_transcribe_device} ({reason}).\n"
+            )
+        manifest.log({"type": "transcribe_runtime_selected", "decision": runtime_decision})
+
+        init_started = time.perf_counter()
+        t = Transcriber(effective_whisper_model, device=effective_transcribe_device)
+        stats["transcriber_init_seconds"] = time.perf_counter() - init_started
         if t.available():
             transcriber = t
         else:
@@ -252,7 +322,7 @@ def run(argv: list[str]) -> int:
     if not cfg.quiet:
         sys.stderr.write("Preprocessing media (resume-aware)...\n")
 
-    t0 = time.time()
+    preprocess_started = time.perf_counter()
     log_lock = threading.Lock()
     state_lock = threading.Lock()
     current = {"audio": None, "image": None, "audio_start": None, "image_start": None}
@@ -302,6 +372,9 @@ def run(argv: list[str]) -> int:
         futs = []
         done_lock = threading.Lock()
         done_ref = {"count": 0}
+        heartbeat_stop = threading.Event()
+        hb_thread = None
+
         for fn in audio_files:
             fut = ex_a.submit(audio_job, fn)
             futs.append(fut)
@@ -311,7 +384,6 @@ def run(argv: list[str]) -> int:
 
         total_tasks = len(futs)
         done = 0
-        heartbeat_stop = threading.Event()
 
         def heartbeat():
             if cfg.quiet:
@@ -319,12 +391,19 @@ def run(argv: list[str]) -> int:
             while not heartbeat_stop.wait(30):
                 with done_lock:
                     c = done_ref["count"]
-                pct = (c / total_tasks * 100.0) if total_tasks else 100.0
                 with state_lock:
                     cur_audio = current.get("audio")
                     cur_image = current.get("image")
                     audio_start = current.get("audio_start")
                     image_start = current.get("image_start")
+                tx = mp.transcription_status()
+                tx_cur = tx.get("current")
+                tx_elapsed = tx.get("current_elapsed_seconds")
+                tx_phase = str(tx.get("phase") or "")
+                tx_pending = int(tx.get("pending", 0) or 0) if tx.get("enabled") else 0
+                tx_remaining = tx_pending + (1 if tx_cur else 0)
+                effective_done, pct = _effective_progress(total_tasks, c, tx_remaining)
+                progress_label = f"{effective_done}/{total_tasks} done"
                 running_parts: list[str] = []
                 if cur_audio:
                     item_elapsed = fmt_eta(time.time() - audio_start) if audio_start else "?"
@@ -332,8 +411,22 @@ def run(argv: list[str]) -> int:
                 if cur_image:
                     item_elapsed = fmt_eta(time.time() - image_start) if image_start else "?"
                     running_parts.append(f"image={cur_image} ({item_elapsed})")
+                if tx.get("enabled"):
+                    if c != effective_done:
+                        running_parts.append(f"media_done={c}/{total_tasks}")
+                    if tx_cur:
+                        item_elapsed = fmt_eta(float(tx_elapsed)) if isinstance(tx_elapsed, (int, float)) else "?"
+                        tx_label = "retry_transcribe" if tx_phase == "quality_retry" else "transcribe"
+                        if tx_pending > 0:
+                            running_parts.append(f"{tx_label}={tx_cur} ({item_elapsed}, {tx_pending} pending)")
+                        else:
+                            running_parts.append(f"{tx_label}={tx_cur} ({item_elapsed})")
+                    elif tx_pending > 0:
+                        queue_label = "retry_queue" if tx_phase == "quality_retry" else "transcribe_queue"
+                        running_parts.append(f"{queue_label}={tx_pending} pending")
+
                 running_desc = " | ".join(running_parts) if running_parts else "idle"
-                log_line(f"Running OK: {c}/{total_tasks} done ({pct:.1f}%) | {running_desc}")
+                log_line(f"Running OK: {progress_label} ({pct:.1f}%) | {running_desc}")
 
         hb_thread = threading.Thread(target=heartbeat, daemon=True)
         hb_thread.start()
@@ -348,18 +441,30 @@ def run(argv: list[str]) -> int:
                 with done_lock:
                     done_ref["count"] = done
 
+        tx = mp.transcription_status()
+        if not cfg.quiet and tx.get("enabled"):
+            tx_pending = int(tx.get("pending", 0) or 0)
+            tx_cur = tx.get("current")
+            if tx_cur or tx_pending > 0:
+                log_line("Audio/image workers done; waiting for queued transcriptions...")
+
+        mp.finalize()
+
         heartbeat_stop.set()
         try:
-            hb_thread.join(timeout=1.0)
+            if hb_thread is not None:
+                hb_thread.join(timeout=1.0)
         except Exception:
             pass
 
-    preprocess_elapsed = time.time() - t0
+    preprocess_elapsed = time.perf_counter() - preprocess_started
+    stats["stage_media_preprocess_seconds"] = preprocess_elapsed
     manifest.log({"type": "media_preprocess_done", "elapsed_seconds": preprocess_elapsed})
 
     if not cfg.quiet:
         sys.stderr.write("Writing conversation outputs...\n")
 
+    output_started = time.perf_counter()
     jsonl_path, md_path, by_month_dir = write_outputs(
         messages=messages,
         folder=folder,
@@ -371,6 +476,9 @@ def run(argv: list[str]) -> int:
         them=[],
         manifest=manifest,
     )
+    output_elapsed = time.perf_counter() - output_started
+    stats["stage_output_write_seconds"] = output_elapsed
+    manifest.log({"type": "stage_timing", "stage": "output_write", "elapsed_seconds": output_elapsed})
 
     participants = sorted({m.sender for m in messages if m.sender})
     min_dt = None
@@ -382,6 +490,12 @@ def run(argv: list[str]) -> int:
             continue
         min_dt = dt if (min_dt is None or dt < min_dt) else min_dt
         max_dt = dt if (max_dt is None or dt > max_dt) else max_dt
+
+    elapsed = time.perf_counter() - run_started
+    stats["stage_total_seconds"] = elapsed
+    for k, v in list(stats.items()):
+        if isinstance(v, float):
+            stats[k] = round(v, 3)
 
     write_report(
         path=out_dir / "report.md",
@@ -404,7 +518,12 @@ def run(argv: list[str]) -> int:
         stats=stats,
     )
 
-    elapsed = time.time() - t0
+    manifest.log(
+        {
+            "type": "stage_timing_summary",
+            "timings_seconds": {k: v for k, v in stats.items() if k.endswith("_seconds")},
+        }
+    )
     manifest.log({"type": "run_end", "elapsed_seconds": elapsed, "stats": stats})
     manifest.close()
 

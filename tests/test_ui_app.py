@@ -1,4 +1,6 @@
 import unittest
+from unittest import mock
+
 from wcp import ui_app
 
 
@@ -18,6 +20,7 @@ class TestUiApp(unittest.TestCase):
         self.assertIn("transformers_available", info)
         self.assertIn("supported_transcription_backend", info)
         self.assertIn("supported_transcription_models", info)
+        self.assertIn("supported_speed_presets", info)
 
     def test_audio_test_requirements_ok(self):
         info = {
@@ -39,6 +42,36 @@ class TestUiApp(unittest.TestCase):
         self.assertTrue(any("transformers" in e for e in errors))
         self.assertTrue(any("torch" in e for e in errors))
         self.assertTrue(any("ffmpeg" in e for e in errors))
+
+    @mock.patch("wcp.ui_app._persist_loaded_state")
+    @mock.patch("wcp.ui_app._is_pid_running", return_value=False)
+    def test_reconcile_loaded_state_marks_dead_running_as_error(self, _pid_mock, persist_mock):
+        state = {
+            "job_id": "abc",
+            "status": "running",
+            "pid": 1234,
+            "exit_code": None,
+            "finished_at": None,
+        }
+        fixed = ui_app._reconcile_loaded_state("abc", state)
+        self.assertEqual(fixed["status"], "error")
+        self.assertEqual(fixed["exit_code"], 1)
+        self.assertTrue(isinstance(fixed.get("finished_at"), str))
+        persist_mock.assert_called_once()
+
+    @mock.patch("wcp.ui_app._persist_loaded_state")
+    @mock.patch("wcp.ui_app._is_pid_running", return_value=True)
+    def test_reconcile_loaded_state_keeps_alive_running(self, _pid_mock, persist_mock):
+        state = {
+            "job_id": "abc",
+            "status": "running",
+            "pid": 1234,
+            "exit_code": None,
+            "finished_at": None,
+        }
+        fixed = ui_app._reconcile_loaded_state("abc", state)
+        self.assertEqual(fixed["status"], "running")
+        persist_mock.assert_not_called()
 
 
 if __name__ == "__main__":

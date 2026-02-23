@@ -22,6 +22,16 @@ class TestUtil(unittest.TestCase):
             util.atomic_write_text(p, "ok")
             self.assertEqual(p.read_text(encoding="utf-8"), "ok")
 
+    def test_media_artifact_stem_is_collision_safe(self):
+        s1 = util.media_artifact_stem("clip.opus")
+        s2 = util.media_artifact_stem("clip.ogg")
+        self.assertNotEqual(s1, s2)
+
+    def test_media_artifact_stem_normalizes_slashes(self):
+        s1 = util.media_artifact_stem(r"Media\PTT-1.opus")
+        s2 = util.media_artifact_stem("Media/PTT-1.opus")
+        self.assertEqual(s1, s2)
+
 
 if __name__ == "__main__":
     unittest.main()

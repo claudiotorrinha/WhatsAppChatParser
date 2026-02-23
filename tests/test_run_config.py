@@ -19,6 +19,7 @@ class TestRunConfig(unittest.TestCase):
             force_cpu=True,
             no_transcribe=True,
             whisper_model="large-v3-turbo",
+            speed_preset="off",
             no_ocr=True,
         )
         argv = cfg.to_argv(include_prog=False)
@@ -31,6 +32,8 @@ class TestRunConfig(unittest.TestCase):
             "--no-transcribe",
             "--whisper-model",
             "large-v3-turbo",
+            "--speed-preset",
+            "off",
             "--no-ocr",
         ]:
             self.assertIn(token, argv)
@@ -39,6 +42,11 @@ class TestRunConfig(unittest.TestCase):
         cfg = RunConfig(folder="x", whisper_model="small")
         errors = cfg.validate()
         self.assertTrue(any("whisper_model" in err for err in errors))
+
+    def test_validate_rejects_unsupported_speed_preset(self):
+        cfg = RunConfig(folder="x", speed_preset="fast")
+        errors = cfg.validate()
+        self.assertTrue(any("speed_preset" in err for err in errors))
 
 
 if __name__ == "__main__":

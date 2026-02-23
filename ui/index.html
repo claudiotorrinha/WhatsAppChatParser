@@ -63,6 +63,10 @@
                     <md-select-option value="medium" selected>medium</md-select-option>
                     <md-select-option value="large-v3-turbo">large-v3-turbo</md-select-option>
                   </md-filled-select>
+                  <md-filled-select label="Speed preset" id="speed_preset" name="speed_preset">
+                    <md-select-option value="auto" selected>Auto (recommended)</md-select-option>
+                    <md-select-option value="off">Off (manual model/device)</md-select-option>
+                  </md-filled-select>
                 </div>
                 <div class="option">
                   <div class="checkbox-row">
@@ -149,6 +153,10 @@
               <div class="stat">
                 <span class="stat-label">Transcribe</span>
                 <span class="stat-value" id="transcribe-preview">Enabled</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Speed preset</span>
+                <span class="stat-value" id="speed-preview">Auto</span>
               </div>
               <div class="stat">
                 <span class="stat-label">CUDA</span>

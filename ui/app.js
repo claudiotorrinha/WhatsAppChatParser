@@ -11,6 +11,7 @@ const stopBtn = document.getElementById("stop-job");
 const outPreview = document.getElementById("out-preview");
 const ocrPreview = document.getElementById("ocr-preview");
 const transcribePreview = document.getElementById("transcribe-preview");
+const speedPreview = document.getElementById("speed-preview");
 const cudaPreview = document.getElementById("cuda-preview");
 const elapsedPreview = document.getElementById("elapsed-preview");
 const sampleAudioInput = document.getElementById("sample_audio");
@@ -44,6 +45,12 @@ let runtimeInfo = null;
 let poller = null;
 let currentJobId = null;
 let elapsedTimer = null;
+let jobActive = false;
+
+const speedPresetLabel = (value) => {
+  if (value === "off") return "Off";
+  return "Auto";
+};
 
 const updateDevicePreview = () => {
   if (id("force_cpu").checked) {
@@ -79,9 +86,12 @@ const syncPreview = () => {
   if (outPreview) outPreview.textContent = id("out").value || "out";
   if (ocrPreview) ocrPreview.textContent = id("no_ocr").checked ? "Disabled" : "Enabled";
   if (transcribePreview) transcribePreview.textContent = id("no_transcribe").checked ? "Disabled" : "Enabled";
+  if (speedPreview) speedPreview.textContent = speedPresetLabel(id("speed_preset").value);
   updateDevicePreview();
 };
-["out", "no_ocr", "no_transcribe", "force_cpu"].forEach((field) => id(field).addEventListener("change", syncPreview));
+["out", "no_ocr", "no_transcribe", "force_cpu", "speed_preset"].forEach((field) =>
+  id(field).addEventListener("change", syncPreview),
+);
 syncPreview();
 
 const runtimeChecks = () => {
@@ -120,7 +130,7 @@ const renderPreflight = () => {
   updateModelTestButtonState();
   const check = runtimeChecks();
   if (check.ok) {
-    if (runButton) runButton.disabled = false;
+    if (runButton) runButton.disabled = jobActive;
     return true;
   }
 
@@ -144,6 +154,27 @@ const loadRuntime = async () => {
     const res = await fetch("/api/runtime");
     if (!res.ok) throw new Error("runtime endpoint unavailable");
     runtimeInfo = await res.json();
+
+    const speedPreset = id("speed_preset");
+    const supported = Array.isArray(runtimeInfo.supported_speed_presets)
+      ? runtimeInfo.supported_speed_presets
+      : ["auto", "off"];
+    const labels = {
+      auto: "Auto (recommended)",
+      off: "Off (manual model/device)",
+    };
+    const current = speedPreset.value || "auto";
+    speedPreset.innerHTML = "";
+    for (const preset of supported) {
+      const opt = document.createElement("md-select-option");
+      opt.setAttribute("value", preset);
+      opt.textContent = labels[preset] || preset;
+      speedPreset.appendChild(opt);
+    }
+    const next = supported.includes(current) ? current : (supported.includes("auto") ? "auto" : supported[0] || "auto");
+    speedPreset.value = next;
+
+    syncPreview();
     updateDevicePreview();
 
     renderPreflight();
@@ -170,6 +201,8 @@ const pollJob = (jobId) => {
   if (poller) clearInterval(poller);
   if (elapsedTimer) clearInterval(elapsedTimer);
   currentJobId = jobId;
+  jobActive = true;
+  if (runButton) runButton.disabled = true;
   setStopEnabled(true);
   progress.classList.remove("hidden");
   progress.indeterminate = true;
@@ -203,18 +236,33 @@ const pollJob = (jobId) => {
         setStatus("Done", "rgba(61, 214, 197, 0.6)");
         progress.classList.add("hidden");
         clearInterval(poller);
+        poller = null;
+        if (elapsedTimer) clearInterval(elapsedTimer);
+        elapsedTimer = null;
+        jobActive = false;
+        renderPreflight();
         setStopEnabled(false);
         setBanner("done", "Done", "Outputs are ready in the output folder.");
       } else if (status.status === "error") {
         setStatus("Error", "rgba(243, 179, 76, 0.7)");
         progress.classList.add("hidden");
         clearInterval(poller);
+        poller = null;
+        if (elapsedTimer) clearInterval(elapsedTimer);
+        elapsedTimer = null;
+        jobActive = false;
+        renderPreflight();
         setStopEnabled(false);
         setBanner("error", "Error", "Something went wrong. Check the log.");
       } else if (status.status === "stopped") {
         setStatus("Stopped", "rgba(243, 179, 76, 0.7)");
         progress.classList.add("hidden");
         clearInterval(poller);
+        poller = null;
+        if (elapsedTimer) clearInterval(elapsedTimer);
+        elapsedTimer = null;
+        jobActive = false;
+        renderPreflight();
         setStopEnabled(false);
         setBanner("error", "Stopped", "The run was stopped early.");
       }
@@ -314,12 +362,14 @@ form.addEventListener("submit", async (event) => {
   fd.append("zip", zipInput.files[0]);
   fd.append("out", id("out").value);
   fd.append("whisper_model", id("whisper_model").value);
+  fd.append("speed_preset", id("speed_preset").value);
   if (id("force_cpu").checked) fd.append("force_cpu", "true");
   if (id("no_transcribe").checked) fd.append("no_transcribe", "true");
   if (id("no_ocr").checked) fd.append("no_ocr", "true");
 
   setStatus("Starting...", "rgba(61, 214, 197, 0.5)");
   logOutput.textContent = "Starting run...";
+  if (runButton) runButton.disabled = true;
 
   const res = await fetch("/api/run", {
     method: "POST",
@@ -327,9 +377,17 @@ form.addEventListener("submit", async (event) => {
   });
 
   if (!res.ok) {
-    const text = await res.text();
-    logOutput.textContent = text || "Failed to start job";
-    setStatus("Failed", "rgba(243, 179, 76, 0.7)");
+    const payload = await res.json().catch(() => null);
+    if (payload && payload.error === "job_already_running") {
+      logOutput.textContent = `Another job is already running (job_id=${payload.job_id}). Stop it or wait until it finishes.`;
+      setStatus("Job running", "rgba(243, 179, 76, 0.7)");
+    } else {
+      const text = payload ? JSON.stringify(payload, null, 2) : (await res.text());
+      logOutput.textContent = text || "Failed to start job";
+      setStatus("Failed", "rgba(243, 179, 76, 0.7)");
+    }
+    jobActive = false;
+    renderPreflight();
     return;
   }
 
@@ -338,6 +396,12 @@ form.addEventListener("submit", async (event) => {
 });
 
 resetBtn.addEventListener("click", () => {
+  if (poller) clearInterval(poller);
+  poller = null;
+  if (elapsedTimer) clearInterval(elapsedTimer);
+  elapsedTimer = null;
+  jobActive = false;
+  currentJobId = null;
   form.reset();
   zipDisplay.value = "";
   if (sampleAudioDisplay) sampleAudioDisplay.value = "";

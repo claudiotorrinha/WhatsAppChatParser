@@ -30,6 +30,7 @@ ATTACHMENT_RE = re.compile(
     r"^\u200e?(?P<file>[^\s].*?)\s+\((?P<label>ficheiro\s+anexado|arquivo\s+anexado|archivo\s+adjunto|file\s+attached)\)$",
     re.IGNORECASE,
 )
+ATTACHED_INLINE_RE = re.compile(r"^<\s*attached:\s*(?P<file>[^>]+?)\s*>$", re.IGNORECASE)
 TIME_AMPM_RE = re.compile(
     r"^(?P<h>\d{1,2}):(?P<m>\d{2})(:(?P<s>\d{2}))?(?P<ampm>am|pm)$",
     re.IGNORECASE,
@@ -325,7 +326,7 @@ def iter_messages(
                 media: list[MediaRef] = []
                 text: Optional[str] = body
 
-                am = ATTACHMENT_RE.match(body)
+                am = ATTACHMENT_RE.match(body) or ATTACHED_INLINE_RE.match(body)
                 if am:
                     fn = am.group("file").strip()
                     kind = guess_kind(fn)

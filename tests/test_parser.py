@@ -67,6 +67,28 @@ class TestParserDetect(unittest.TestCase):
         self.assertEqual(msg.media[0].file, "IMG-1.jpg")
         self.assertIsNone(msg.text)
 
+    def test_attachment_detection_attached_tag_android(self):
+        chat = "9/20/2025, 9:41 AM - John: <attached: PTT-1.opus>\n"
+        path = self._write_chat(chat)
+        msgs = list(parser.iter_messages(path, tz_offset="+00:00"))
+        self.assertEqual(len(msgs), 1)
+        msg = msgs[0]
+        self.assertEqual(msg.type, "audio")
+        self.assertEqual(len(msg.media), 1)
+        self.assertEqual(msg.media[0].file, "PTT-1.opus")
+        self.assertIsNone(msg.text)
+
+    def test_attachment_detection_attached_tag_ios(self):
+        chat = "[20/09/2025, 21:41] John: <attached: IMG-1.jpg>\n"
+        path = self._write_chat(chat)
+        msgs = list(parser.iter_messages(path, tz_offset="+00:00"))
+        self.assertEqual(len(msgs), 1)
+        msg = msgs[0]
+        self.assertEqual(msg.type, "image")
+        self.assertEqual(len(msg.media), 1)
+        self.assertEqual(msg.media[0].file, "IMG-1.jpg")
+        self.assertIsNone(msg.text)
+
     def test_date_order_override(self):
         chat = "03/04/2025, 09:00 - John: hi\n"
         path = self._write_chat(chat)

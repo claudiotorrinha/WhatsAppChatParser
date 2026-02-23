@@ -9,7 +9,7 @@ from typing import Optional
 
 from .manifest import ManifestLogger
 from .models import Enrichment, Message
-from .util import clip, relpath_posix
+from .util import clip, media_artifact_stems, relpath_posix
 
 
 def sender_to_id(sender: Optional[str], me: list[str], them: list[str]) -> Optional[str]:
@@ -83,6 +83,9 @@ def write_outputs(
     transcripts_dir = out_dir / "transcripts"
     ocr_dir = out_dir / "ocr"
     converted_dir = out_dir / "converted"
+    transcript_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
+    ocr_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
+    converted_cache: dict[str, Optional[str]] = {}
 
     md_f = None
     last_month = None
@@ -141,39 +144,71 @@ def write_outputs(
                 mf.write(f"# {month_key}\n\n")
         return jf, mf
 
+    def artifact_candidates(base_dir: Path, file_name: str, suffix: str) -> list[Path]:
+        return [base_dir / (stem + suffix) for stem in media_artifact_stems(file_name)]
+
+    def read_text_artifact_cached(
+        cache: dict[str, tuple[Optional[str], Optional[str]]],
+        *,
+        file_name: str,
+        base_dir: Path,
+    ) -> tuple[Optional[str], Optional[str]]:
+        if file_name in cache:
+            return cache[file_name]
+        out_rel: Optional[str] = None
+        out_text: Optional[str] = None
+        for path in artifact_candidates(base_dir, file_name, ".txt"):
+            if not path.exists():
+                continue
+            out_rel = relpath_posix(path, out_dir)
+            try:
+                out_text = path.read_text(encoding="utf-8", errors="replace").strip()
+            except Exception:
+                out_text = None
+            break
+        cache[file_name] = (out_rel, out_text)
+        return out_rel, out_text
+
+    def converted_artifact_cached(file_name: str) -> Optional[str]:
+        if file_name in converted_cache:
+            return converted_cache[file_name]
+        for ext in (".mp3", ".wav"):
+            for path in artifact_candidates(converted_dir, file_name, ext):
+                if path.exists():
+                    converted_cache[file_name] = relpath_posix(path, out_dir)
+                    return converted_cache[file_name]
+        converted_cache[file_name] = None
+        return None
+
     with jsonl_path.open("w", encoding="utf-8") as f_out:
         for i, msg in enumerate(messages):
             # Enrichment attach
             enr = Enrichment()
             for mref in msg.media:
-                stem = Path(mref.file).stem
                 if mref.kind == "audio":
-                    tfile = transcripts_dir / (stem + ".txt")
-                    if tfile.exists():
-                        try:
-                            text = tfile.read_text(encoding="utf-8", errors="replace").strip()
-                            enr.transcript_file = relpath_posix(tfile, out_dir)
-                            enr.transcript_text = text
-                        except Exception:
-                            pass
-
-                    # prefer mp3 if present
-                    mp3 = converted_dir / (stem + ".mp3")
-                    wav = converted_dir / (stem + ".wav")
-                    if mp3.exists():
-                        mref.converted_file = relpath_posix(mp3, out_dir)
-                    elif wav.exists():
-                        mref.converted_file = relpath_posix(wav, out_dir)
+                    t_rel, t_text = read_text_artifact_cached(
+                        transcript_cache,
+                        file_name=mref.file,
+                        base_dir=transcripts_dir,
+                    )
+                    if t_rel:
+                        enr.transcript_file = t_rel
+                    if isinstance(t_text, str):
+                        enr.transcript_text = t_text
+                    converted_rel = converted_artifact_cached(mref.file)
+                    if converted_rel:
+                        mref.converted_file = converted_rel
 
                 if mref.kind == "image":
-                    ofile = ocr_dir / (stem + ".txt")
-                    if ofile.exists():
-                        try:
-                            text = ofile.read_text(encoding="utf-8", errors="replace").strip()
-                            enr.ocr_text_file = relpath_posix(ofile, out_dir)
-                            enr.ocr_text = text
-                        except Exception:
-                            pass
+                    o_rel, o_text = read_text_artifact_cached(
+                        ocr_cache,
+                        file_name=mref.file,
+                        base_dir=ocr_dir,
+                    )
+                    if o_rel:
+                        enr.ocr_text_file = o_rel
+                    if isinstance(o_text, str):
+                        enr.ocr_text = o_text
 
             if enr.ocr_text_file or enr.transcript_file:
                 msg.enrichment = enr

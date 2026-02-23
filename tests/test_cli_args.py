@@ -10,6 +10,11 @@ class TestCliArgs(unittest.TestCase):
         self.assertEqual(args.whisper_model, "large-v3-turbo")
         self.assertTrue(args.force_cpu)
 
+    def test_speed_preset_is_accepted(self):
+        ap = build_arg_parser()
+        args = ap.parse_args(["x", "--speed-preset", "off"])
+        self.assertEqual(args.speed_preset, "off")
+
     def test_legacy_flags_are_stripped(self):
         cleaned, ignored = _strip_legacy_args(["x", "--config", "cfg.json", "--tz=+01:00", "--no-report"])
         self.assertEqual(cleaned, ["x"])

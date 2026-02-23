@@ -166,6 +166,147 @@ def _load_job_state(job_id: str) -> Optional[dict]:
         return None
 
 
+def _persist_loaded_state(job_id: str, state: dict) -> None:
+    path = _resolve_job_state_path(job_id)
+    if not path:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, sort_keys=True)
+    tmp.replace(path)
+
+    out_dir_raw = state.get("out_dir")
+    log_path_raw = state.get("log_path")
+    if isinstance(out_dir_raw, str) and out_dir_raw and isinstance(log_path_raw, str) and log_path_raw:
+        try:
+            _index_job(job_id, out_dir=Path(out_dir_raw), state_path=path, log_path=Path(log_path_raw))
+        except Exception:
+            pass
+
+
+def _is_pid_running(pid: object) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            proc = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            out = (proc.stdout or "").strip()
+            if not out:
+                return False
+            if "No tasks are running" in out:
+                return False
+            return str(pid) in out
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _reconcile_loaded_state(job_id: str, state: dict) -> dict:
+    if state.get("status") != "running":
+        return state
+    if _is_pid_running(state.get("pid")):
+        return state
+    fixed = dict(state)
+    fixed["status"] = "error"
+    fixed["exit_code"] = 1 if fixed.get("exit_code") is None else fixed.get("exit_code")
+    if not fixed.get("finished_at"):
+        fixed["finished_at"] = _now_iso()
+    fixed["updated_at"] = _now_iso()
+    _persist_loaded_state(job_id, fixed)
+    return fixed
+
+
+def _find_active_job() -> Optional[str]:
+    with _jobs_lock:
+        for job_id, job in _jobs.items():
+            if job.process and job.process.poll() is None:
+                return job_id
+
+    idx = _load_state_index()
+    jobs = idx.get("jobs", {})
+    if not isinstance(jobs, dict):
+        return None
+    for job_id, rec in jobs.items():
+        if not isinstance(rec, dict):
+            continue
+        p = rec.get("state_path")
+        if not isinstance(p, str) or not p:
+            continue
+        state_path = Path(p)
+        if not state_path.exists():
+            continue
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        state = _reconcile_loaded_state(str(job_id), state)
+        if state.get("status") == "running":
+            return str(job_id)
+    return None
+
+
+def _append_stop_manifest_if_open(out_dir: Path, *, reason: str) -> None:
+    manifest_path = out_dir / "manifest.jsonl"
+    if not manifest_path.exists():
+        return
+    try:
+        last_start = -1
+        last_end = -1
+        with manifest_path.open("r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                t = obj.get("type")
+                if t == "run_start":
+                    last_start = i
+                elif t == "run_end":
+                    last_end = i
+        if last_start <= last_end:
+            return
+
+        now_iso = _now_iso()
+        with manifest_path.open("a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "type": "run_stopped",
+                        "reason": reason,
+                        "event_ts": now_iso,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            f.write(
+                json.dumps(
+                    {
+                        "type": "run_end",
+                        "elapsed_seconds": 0.0,
+                        "stats": {},
+                        "status": "stopped",
+                        "event_ts": now_iso,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+
+
 def _read_tail(path: Path, max_bytes: int = 20000) -> str:
     if not path.exists():
         return ""
@@ -200,6 +341,7 @@ def _build_run_config(form, zip_path: Path, out_dir_str: str) -> RunConfig:
         force_cpu=force_cpu,
         no_transcribe=no_transcribe,
         whisper_model=str(form.get("whisper_model") or defaults.whisper_model),
+        speed_preset=str(form.get("speed_preset") or defaults.speed_preset),
         no_ocr=no_ocr,
     )
 
@@ -379,7 +521,51 @@ def _runtime_info() -> dict:
         "install_hints": _system_dependency_hints(),
         "supported_transcription_backend": "hf",
         "supported_transcription_models": list(SUPPORTED_WHISPER_MODELS),
+        "supported_speed_presets": ["auto", "off"],
     }
+
+
+def _request_stop_pid(pid: object, *, timeout_seconds: float = 8.0) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return True
+    try:
+        if os.name == "nt":
+            try:
+                os.kill(pid, signal.CTRL_BREAK_EVENT)
+            except Exception:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except Exception:
+                    return False
+        else:
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except Exception:
+                os.kill(pid, signal.SIGTERM)
+    except Exception:
+        return False
+
+    deadline = time.time() + max(0.5, timeout_seconds)
+    while time.time() < deadline:
+        if not _is_pid_running(pid):
+            return True
+        time.sleep(0.2)
+    return not _is_pid_running(pid)
+
+
+def _force_stop_pid(pid: object) -> None:
+    if not isinstance(pid, int) or pid <= 0:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
 
 
 def _run_job(job: JobInfo, argv: list[str]) -> None:
@@ -446,6 +632,9 @@ async def run_job(request: Request, zip: UploadFile = File(...)) -> JSONResponse
     out_dir_str = str(form.get("out") or "out")
     out_dir = _resolve_out_dir(out_dir_str)
     out_dir.mkdir(parents=True, exist_ok=True)
+    active_job_id = _find_active_job()
+    if active_job_id:
+        return JSONResponse({"error": "job_already_running", "job_id": active_job_id}, status_code=409)
     uploads_dir = out_dir / "_uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
@@ -535,7 +724,15 @@ def job_status(job_id: str) -> JSONResponse:
         state = _load_job_state(job_id)
         if not state:
             return JSONResponse({"error": "job_not_found"}, status_code=404)
+        state = _reconcile_loaded_state(job_id, state)
         return JSONResponse(_job_public_state(state))
+    if job.status == "running" and job.process and job.process.poll() is not None:
+        code = job.process.poll()
+        job.exit_code = int(code) if code is not None else 1
+        job.status = "done" if job.exit_code == 0 else "error"
+        if not job.finished_at:
+            job.finished_at = _now_iso()
+        _save_job_state(job)
     return JSONResponse(_job_public_state(_job_state_dict(job)))
 
 
@@ -567,21 +764,34 @@ def stop_job(job_id: str) -> JSONResponse:
         state = _load_job_state(job_id)
         if not state:
             return JSONResponse({"error": "job_not_found"}, status_code=404)
-        return JSONResponse({"status": state.get("status"), "error": "job_not_running"}, status_code=409)
+        state = _reconcile_loaded_state(job_id, state)
+        if state.get("status") != "running":
+            return JSONResponse({"status": state.get("status"), "error": "job_not_running"}, status_code=409)
+        pid = state.get("pid")
+        if not _request_stop_pid(pid):
+            _force_stop_pid(pid)
+        state["status"] = "stopped"
+        state["finished_at"] = _now_iso()
+        state["updated_at"] = _now_iso()
+        if state.get("exit_code") is None:
+            state["exit_code"] = 130
+        _persist_loaded_state(job_id, state)
+        out_dir_raw = state.get("out_dir")
+        if isinstance(out_dir_raw, str) and out_dir_raw:
+            _append_stop_manifest_if_open(Path(out_dir_raw), reason="stopped_via_api")
+        return JSONResponse({"status": state["status"]})
 
     if job.process and job.process.poll() is None:
         try:
             pid = job.process.pid
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                try:
-                    os.killpg(pid, signal.SIGTERM)
-                except Exception:
-                    job.process.terminate()
+            if not _request_stop_pid(pid):
+                _force_stop_pid(pid)
             job.status = "stopped"
             job.finished_at = _now_iso()
+            if job.exit_code is None:
+                job.exit_code = 130
             _save_job_state(job)
+            _append_stop_manifest_if_open(job.out_dir, reason="stopped_via_api")
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
