@@ -213,6 +213,11 @@ class MediaProcessor:
     def _artifact_paths(base_dir: Path, file_name: str, suffix: str) -> list[Path]:
         return [base_dir / (stem + suffix) for stem in media_artifact_stems(file_name)]
 
+    @staticmethod
+    def _retried_marker_path(tfile: Path) -> Path:
+        """Return the path to the `.retried` companion marker for a transcript."""
+        return tfile.with_suffix(".retried")
+
     def _transcribe_call(self, wav: Path, *, quality_retry: bool) -> str:
         if self.transcriber is None:
             raise RuntimeError("Transcriber unavailable.")
@@ -333,6 +338,14 @@ class MediaProcessor:
             except Exception as e:
                 self._inc("audio_transcript_retry_failed")
                 self.manifest.log({"type": "audio_transcript_retry_failed", "file": file_name, "error": str(e)})
+
+            # Mark this transcript as already retried so future runs skip it.
+            try:
+                marker = self._retried_marker_path(tfile)
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text("retried\n", encoding="utf-8")
+            except Exception:
+                pass  # Best-effort; missing marker just means one extra retry.
             finally:
                 with self._quality_retry_lock:
                     self._quality_retry_current_file = None
@@ -552,26 +565,42 @@ class MediaProcessor:
                 existing_text = normalize_transcript_text(existing_text)
                 existing_quality = assess_transcript_quality(existing_text)
                 if not existing_quality.ok:
-                    self._inc("audio_transcript_quality_flagged")
-                    self.manifest.log(
-                        {
-                            "type": "audio_transcript_quality_flagged",
-                            "file": file_name,
-                            "issues": existing_quality.issues,
-                            "metrics": existing_quality.metrics,
-                            "source": "resume_existing",
-                            "retry_scheduled": True,
-                        }
-                    )
-                    wav_for_retry = ensure_wav(count_skipped=False)
-                    if wav_for_retry is not None:
-                        self._queue_quality_retry(
-                            file_name,
-                            wav_for_retry,
-                            existing_tfile,
-                            existing_quality.issues,
-                            metrics=existing_quality.metrics,
+                    # Check whether this transcript was already retried on a prior run.
+                    already_retried = self._retried_marker_path(existing_tfile).exists()
+                    if already_retried:
+                        self._inc("audio_transcript_quality_flagged")
+                        self.manifest.log(
+                            {
+                                "type": "audio_transcript_quality_flagged",
+                                "file": file_name,
+                                "issues": existing_quality.issues,
+                                "metrics": existing_quality.metrics,
+                                "source": "resume_existing",
+                                "retry_scheduled": False,
+                                "reason": "already_retried",
+                            }
                         )
+                    else:
+                        self._inc("audio_transcript_quality_flagged")
+                        self.manifest.log(
+                            {
+                                "type": "audio_transcript_quality_flagged",
+                                "file": file_name,
+                                "issues": existing_quality.issues,
+                                "metrics": existing_quality.metrics,
+                                "source": "resume_existing",
+                                "retry_scheduled": True,
+                            }
+                        )
+                        wav_for_retry = ensure_wav(count_skipped=False)
+                        if wav_for_retry is not None:
+                            self._queue_quality_retry(
+                                file_name,
+                                wav_for_retry,
+                                existing_tfile,
+                                existing_quality.issues,
+                                metrics=existing_quality.metrics,
+                            )
                 return
 
             should_count_wav_skip = (not wav_created_this_run) and (not wav_skip_counted_this_run)
